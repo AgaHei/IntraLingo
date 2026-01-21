@@ -74,8 +74,7 @@ class NLLBTranslator:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self.model = AutoModelForSeq2SeqLM.from_pretrained(
                 self.model_name,
-                torch_dtype=torch.float32,  # Use float32 instead of float16 for CPU
-                device_map="cpu"  # Force CPU usage
+                torch_dtype=torch.float32  # Use float32 for CPU
             )
             self.model.to(self.device)
             self.model.eval()  # Set to evaluation mode
