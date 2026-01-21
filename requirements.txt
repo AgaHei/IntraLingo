@@ -1,14 +1,4 @@
-# Document processing
-python-docx==1.2.0
-
-# Machine translation
-transformers==4.36.0
+python-docx
+transformers
 torch
-sentencepiece==0.1.99
-sacremoses==0.0.53
-
-# Web interface
 streamlit
-
-# Additional dependencies
-accelerate
