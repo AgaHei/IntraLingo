@@ -69,7 +69,6 @@ class NLLBTranslator:
             st.write("🔄 Loading translation model... (this may take a few minutes on first use)")
             
             # Use CPU only to reduce memory usage
-            import torch
             torch.set_default_dtype(torch.float32)
             
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
@@ -80,9 +79,14 @@ class NLLBTranslator:
             )
             self.model.to(self.device)
             self.model.eval()  # Set to evaluation mode
+            
+            st.write("✓ Model loaded successfully!")
             print("✓ Model loaded successfully!")
             
         except Exception as e:
+            st.error(f"❌ Error loading model: {str(e)}")
+            st.info("💡 Try refreshing the page or contact support if the issue persists.")
+            raise e
             st.error(f"❌ Error loading model: {str(e)}")
             st.info("💡 Try refreshing the page or contact support if the issue persists.")
             raise e
