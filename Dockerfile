@@ -25,5 +25,5 @@ EXPOSE 7860
 # Health check
 HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health
 
-# Run Streamlit
-CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
+# Run Streamlit with explicit configuration
+CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.maxUploadSize=50", "--browser.gatherUsageStats=false"]
