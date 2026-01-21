@@ -1,12 +1,3 @@
----
-title: IntraLingo
-emoji: 🌐
-colorFrom: blue
-colorTo: purple
-sdk: docker
-pinned: false
----
-
 # 🌐 IntraLingo - Confidential Business Document Translation
 
 **Professional English ↔ Polish translation with complete format preservation**
