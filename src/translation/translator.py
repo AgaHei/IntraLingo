@@ -8,6 +8,17 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import torch
 from typing import List, Union
 
+# Import streamlit for user feedback if available
+try:
+    import streamlit as st
+except ImportError:
+    # Create a dummy st object for non-Streamlit environments
+    class DummySt:
+        def write(self, text): print(text)
+        def error(self, text): print(f"ERROR: {text}")
+        def info(self, text): print(f"INFO: {text}")
+    st = DummySt()
+
 
 class NLLBTranslator:
     """
@@ -32,17 +43,6 @@ class NLLBTranslator:
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         else:
             self.device = device
-        
-        # Import streamlit for user feedback
-        try:
-            import streamlit as st
-        except ImportError:
-            # Create a dummy st object for non-Streamlit environments
-            class DummySt:
-                def write(self, text): print(text)
-                def error(self, text): print(f"ERROR: {text}")
-                def info(self, text): print(f"INFO: {text}")
-            st = DummySt()
             
         # Model priority: Base model first for reliability, then try fine-tuned
         import os
@@ -80,7 +80,6 @@ class NLLBTranslator:
             )
             self.model.to(self.device)
             self.model.eval()  # Set to evaluation mode
-            
             st.write("✓ Model loaded successfully!")
             print("✓ Model loaded successfully!")
             
