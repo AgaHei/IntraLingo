@@ -33,37 +33,22 @@ class NLLBTranslator:
         else:
             self.device = device
         
-        # Model priority: Base model -> HuggingFace Hub -> Local (for reliable deployment)
+        # Model priority: Base model first for reliability, then try fine-tuned
         import os
         
-        # Use base model first for reliability, then try fine-tuned
-        try:
-            # Try HuggingFace Hub model first
-            hub_model_name = "AgaHei/AH-nllb-finetuned-business-en-pl"
-            from transformers import AutoConfig
-            AutoConfig.from_pretrained(hub_model_name)
-            self.model_name = hub_model_name
-            print(f"✓ Using HuggingFace Hub model: {hub_model_name}")
-        except Exception as e:
-            print(f"⚠ Hub model not accessible ({str(e)[:100]}...), trying alternatives")
-            # Fall back to local fine-tuned model
-            finetuned_path = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'nllb-finetuned')
-            if os.path.exists(finetuned_path) and os.path.isdir(finetuned_path):
-                # Check if required model files exist (support both formats)
-                config_exists = os.path.exists(os.path.join(finetuned_path, 'config.json'))
-                model_weights_exist = (
-                    os.path.exists(os.path.join(finetuned_path, 'pytorch_model.bin')) or
-                    os.path.exists(os.path.join(finetuned_path, 'model.safetensors'))
-                )
-                if config_exists and model_weights_exist:
-                    self.model_name = finetuned_path
-                    print("✓ Using local FINE-TUNED model")
-                else:
-                    self.model_name = 'facebook/nllb-200-distilled-600M'
-                    print("⚠ Using BASE model (fine-tuned not available)")
-            else:
-                self.model_name = 'facebook/nllb-200-distilled-600M'
-                print("⚠ Using BASE model (fine-tuned not found)")
+        # Start with base model to ensure reliability
+        self.model_name = 'facebook/nllb-200-distilled-600M'
+        print("✓ Using BASE NLLB model (most reliable)")
+        
+        # Optionally try fine-tuned model (commented out for now due to tokenizer issues)
+        # try:
+        #     hub_model_name = "AgaHei/AH-nllb-finetuned-business-en-pl"
+        #     from transformers import AutoConfig
+        #     AutoConfig.from_pretrained(hub_model_name)
+        #     self.model_name = hub_model_name
+        #     print(f"✓ Using HuggingFace Hub model: {hub_model_name}")
+        # except Exception as e:
+        #     print(f"⚠ Hub model not accessible, using base model instead")
         
         # NLLB language codes (different from simple 2-letter codes)
         self.lang_codes = self._get_nllb_lang_codes()

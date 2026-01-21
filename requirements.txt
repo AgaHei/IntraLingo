@@ -2,3 +2,6 @@ python-docx
 transformers
 torch
 streamlit
+sentencepiece
+sacremoses
+protobuf
