@@ -235,8 +235,8 @@ def main():
                 st.info(f"📊 File size: {uploaded_file.size / 1024:.1f} KB ({file_size_mb:.2f} MB)")
                 
                 # Debug info
-                st.debug(f"File type: {uploaded_file.type}")
-                st.debug(f"File object: {type(uploaded_file)}")
+                # st.debug(f"File type: {uploaded_file.type}")
+                # st.debug(f"File object: {type(uploaded_file)}")
                 
                 # Check file size
                 if file_size_mb > 10:
