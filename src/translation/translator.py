@@ -80,7 +80,6 @@ class NLLBTranslator:
             )
             self.model.to(self.device)
             self.model.eval()  # Set to evaluation mode
-            st.write("✓ Model loaded successfully!")
             print("✓ Model loaded successfully!")
             
         except Exception as e:
