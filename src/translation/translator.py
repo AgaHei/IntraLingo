@@ -33,19 +33,19 @@ class NLLBTranslator:
         else:
             self.device = device
         
-        # Model priority: HuggingFace Hub -> Local -> Base model
+        # Model priority: Base model -> HuggingFace Hub -> Local (for reliable deployment)
         import os
         
-        # Try HuggingFace Hub model first (for deployment)
-        hub_model_name = "AgaHei/AH-nllb-finetuned-business-en-pl"
-        
+        # Use base model first for reliability, then try fine-tuned
         try:
-            # Try to load from HuggingFace Hub
+            # Try HuggingFace Hub model first
+            hub_model_name = "AgaHei/AH-nllb-finetuned-business-en-pl"
             from transformers import AutoConfig
             AutoConfig.from_pretrained(hub_model_name)
             self.model_name = hub_model_name
             print(f"✓ Using HuggingFace Hub model: {hub_model_name}")
-        except Exception:
+        except Exception as e:
+            print(f"⚠ Hub model not accessible ({str(e)[:100]}...), trying alternatives")
             # Fall back to local fine-tuned model
             finetuned_path = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'nllb-finetuned')
             if os.path.exists(finetuned_path) and os.path.isdir(finetuned_path):
@@ -60,7 +60,7 @@ class NLLBTranslator:
                     print("✓ Using local FINE-TUNED model")
                 else:
                     self.model_name = 'facebook/nllb-200-distilled-600M'
-                    print("⚠ Fine-tuned model incomplete, using BASE model")
+                    print("⚠ Using BASE model (fine-tuned not available)")
             else:
                 self.model_name = 'facebook/nllb-200-distilled-600M'
                 print("⚠ Using BASE model (fine-tuned not found)")
