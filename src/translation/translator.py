@@ -33,6 +33,17 @@ class NLLBTranslator:
         else:
             self.device = device
         
+        # Import streamlit for user feedback
+        try:
+            import streamlit as st
+        except ImportError:
+            # Create a dummy st object for non-Streamlit environments
+            class DummySt:
+                def write(self, text): print(text)
+                def error(self, text): print(f"ERROR: {text}")
+                def info(self, text): print(f"INFO: {text}")
+            st = DummySt()
+            
         # Model priority: Base model first for reliability, then try fine-tuned
         import os
         
@@ -53,17 +64,30 @@ class NLLBTranslator:
         # NLLB language codes (different from simple 2-letter codes)
         self.lang_codes = self._get_nllb_lang_codes()
         
-        print(f"Loading NLLB model: {self.model_name}")
-        print(f"Translation: {source_lang} → {target_lang}")
-        print(f"Device: {self.device}")
-        
-        # Load model and tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
-        self.model.to(self.device)
-        self.model.eval()  # Set to evaluation mode
-        
-        print("✓ Model loaded successfully!")
+        # Load model and tokenizer with error handling
+        try:
+            st.write("🔄 Loading translation model... (this may take a few minutes on first use)")
+            
+            # Use CPU only to reduce memory usage
+            import torch
+            torch.set_default_dtype(torch.float32)
+            
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float32,  # Use float32 instead of float16 for CPU
+                device_map="cpu"  # Force CPU usage
+            )
+            self.model.to(self.device)
+            self.model.eval()  # Set to evaluation mode
+            
+            st.write("✓ Model loaded successfully!")
+            print("✓ Model loaded successfully!")
+            
+        except Exception as e:
+            st.error(f"❌ Error loading model: {str(e)}")
+            st.info("💡 Try refreshing the page or contact support if the issue persists.")
+            raise e
     
     def _get_nllb_lang_codes(self):
         """
