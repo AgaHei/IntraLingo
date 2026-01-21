@@ -220,16 +220,36 @@ def main():
     with col1:
         st.markdown("### 📁 Upload Document")
         
-        # File uploader
+        # File uploader with size limit
         uploaded_file = st.file_uploader(
             "Choose a .docx file",
             type=['docx'],
-            help="Upload a Word document (.docx format only)"
+            help="Upload a Word document (.docx format only). Max size: 10MB"
         )
         
         if uploaded_file:
-            st.success(f"✓ File uploaded: **{uploaded_file.name}**")
-            st.info(f"📊 File size: {uploaded_file.size / 1024:.1f} KB")
+            # Check file size (10MB limit for HF Spaces)
+            max_size_mb = 10
+            file_size_mb = uploaded_file.size / (1024 * 1024)
+            
+            if file_size_mb > max_size_mb:
+                st.error(f"❌ File too large: {file_size_mb:.1f}MB. Maximum allowed: {max_size_mb}MB")
+                st.info("💡 Try compressing your document or removing large images.")
+                uploaded_file = None
+            else:
+                st.success(f"✓ File uploaded: **{uploaded_file.name}**")
+                st.info(f"📊 File size: {uploaded_file.size / 1024:.1f} KB")
+                
+                # Validate file format
+                try:
+                    # Try to read a small portion to validate
+                    test_data = uploaded_file.getvalue()[:1024]
+                    if not test_data.startswith(b'PK'):  # ZIP/DOCX signature
+                        st.error("❌ Invalid file format. Please upload a valid .docx file.")
+                        uploaded_file = None
+                except Exception as e:
+                    st.error(f"❌ File validation error: {str(e)}")
+                    uploaded_file = None
     
     with col2:
         st.markdown("### ⚙️ Translation Settings")
