@@ -1,1 +1,0 @@
-# IntraLingo src package
