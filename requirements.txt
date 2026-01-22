@@ -1,0 +1,14 @@
+# Document processing
+python-docx==1.2.0
+
+# Machine translation
+transformers==4.36.0
+torch==2.2.0
+sentencepiece==0.1.99
+sacremoses==0.0.53
+
+# Web interface - GRADIO instead of Streamlit
+gradio==4.19.0
+
+# Additional dependencies
+accelerate==0.25.0
