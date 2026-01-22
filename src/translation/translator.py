@@ -8,16 +8,15 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import torch
 from typing import List, Union
 
-# Import streamlit for user feedback if available
-try:
-    import streamlit as st
-except ImportError:
-    # Create a dummy st object for non-Streamlit environments
-    class DummySt:
-        def write(self, text): print(text)
-        def error(self, text): print(f"ERROR: {text}")
-        def info(self, text): print(f"INFO: {text}")
-    st = DummySt()
+# Simple print functions for user feedback
+def log_info(text):
+    print(text)
+
+def log_error(text):
+    print(f"ERROR: {text}")
+
+def log_warning(text):
+    print(f"WARNING: {text}")
 
 
 class NLLBTranslator:
@@ -65,7 +64,7 @@ class NLLBTranslator:
         
         # Load model and tokenizer with error handling
         try:
-            st.write("🔄 Loading translation model... (this may take a few minutes on first use)")
+            log_info("🔄 Loading translation model... (this may take a few minutes on first use)")
             
             # Use CPU only to reduce memory usage
             torch.set_default_dtype(torch.float32)
@@ -78,15 +77,12 @@ class NLLBTranslator:
             self.model.to(self.device)
             self.model.eval()  # Set to evaluation mode
             
-            st.write("✓ Model loaded successfully!")
+            log_info("✓ Model loaded successfully!")
             print("✓ Model loaded successfully!")
             
         except Exception as e:
-            st.error(f"❌ Error loading model: {str(e)}")
-            st.info("💡 Try refreshing the page or contact support if the issue persists.")
-            raise e
-            st.error(f"❌ Error loading model: {str(e)}")
-            st.info("💡 Try refreshing the page or contact support if the issue persists.")
+            log_error(f"❌ Error loading model: {str(e)}")
+            log_info("💡 Try refreshing the page or contact support if the issue persists.")
             raise e
     
     def _get_nllb_lang_codes(self):
