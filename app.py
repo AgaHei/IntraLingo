@@ -295,9 +295,61 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
             
             if block['type'] == 'paragraph':
                 translated_block = copy.deepcopy(block)
-                for run in translated_block['runs']:
-                    if run['text'].strip():
-                        run['text'] = translator.translate_text(run['text'])
+                
+                # Combine all run texts into one string for translation
+                full_text = ''.join(run['text'] for run in translated_block['runs'])
+                
+                if full_text.strip():
+                    # Translate the entire paragraph at once
+                    translated_text = translator.translate_text(full_text)
+                    
+                    # Redistribute translated text across runs proportionally
+                    # This preserves formatting while maintaining translation quality
+                    if len(translated_block['runs']) == 1:
+                        # Simple case: one run
+                        translated_block['runs'][0]['text'] = translated_text
+                    else:
+                        # Multiple runs: try to split intelligently
+                        # Calculate character positions based on original runs
+                        original_lengths = [len(run['text']) for run in block['runs']]
+                        total_original = sum(original_lengths)
+                        
+                        if total_original > 0:
+                            # Distribute proportionally
+                            translated_parts = []
+                            current_pos = 0
+                            
+                            for j, orig_len in enumerate(original_lengths):
+                                if j == len(original_lengths) - 1:
+                                    # Last run gets remainder
+                                    part = translated_text[current_pos:]
+                                else:
+                                    # Calculate proportional length
+                                    proportion = orig_len / total_original
+                                    part_len = int(len(translated_text) * proportion)
+                                    
+                                    # Try to break at word boundary
+                                    if part_len < len(translated_text):
+                                        # Look for space near the break point
+                                        search_range = min(20, part_len // 2)
+                                        best_break = part_len
+                                        for offset in range(-search_range, search_range):
+                                            pos = part_len + offset
+                                            if 0 <= pos < len(translated_text) and translated_text[pos] == ' ':
+                                                best_break = pos
+                                                break
+                                        part_len = best_break
+                                    
+                                    part = translated_text[current_pos:current_pos + part_len]
+                                    current_pos += part_len
+                                
+                                translated_block['runs'][j]['text'] = part
+                        else:
+                            # Fallback: put everything in first run
+                            translated_block['runs'][0]['text'] = translated_text
+                            for j in range(1, len(translated_block['runs'])):
+                                translated_block['runs'][j]['text'] = ''
+                
                 translated_content.append(translated_block)
             
             elif block['type'] == 'table':
@@ -305,9 +357,47 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
                 for row in translated_block['rows']:
                     for cell in row:
                         for para in cell['paragraphs']:
-                            for run in para['runs']:
-                                if run['text'].strip():
-                                    run['text'] = translator.translate_text(run['text'])
+                            # Same logic for table paragraphs
+                            full_text = ''.join(run['text'] for run in para['runs'])
+                            
+                            if full_text.strip():
+                                translated_text = translator.translate_text(full_text)
+                                
+                                if len(para['runs']) == 1:
+                                    para['runs'][0]['text'] = translated_text
+                                else:
+                                    # Distribute across runs
+                                    original_lengths = [len(run['text']) for run in para['runs']]
+                                    total_original = sum(original_lengths)
+                                    
+                                    if total_original > 0:
+                                        current_pos = 0
+                                        for j, orig_len in enumerate(original_lengths):
+                                            if j == len(original_lengths) - 1:
+                                                part = translated_text[current_pos:]
+                                            else:
+                                                proportion = orig_len / total_original
+                                                part_len = int(len(translated_text) * proportion)
+                                                
+                                                # Word boundary search
+                                                search_range = min(20, part_len // 2)
+                                                best_break = part_len
+                                                for offset in range(-search_range, search_range):
+                                                    pos = part_len + offset
+                                                    if 0 <= pos < len(translated_text) and translated_text[pos] == ' ':
+                                                        best_break = pos
+                                                        break
+                                                part_len = best_break
+                                                
+                                                part = translated_text[current_pos:current_pos + part_len]
+                                                current_pos += part_len
+                                            
+                                            para['runs'][j]['text'] = part
+                                    else:
+                                        para['runs'][0]['text'] = translated_text
+                                        for j in range(1, len(para['runs'])):
+                                            para['runs'][j]['text'] = ''
+                
                 translated_content.append(translated_block)
         
         progress(0.8, desc="📝 Reconstructing document...")
