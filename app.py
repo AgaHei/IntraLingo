@@ -42,6 +42,10 @@ def translate_document(input_file, language_direction):
         Tuple: (output_file_path, status_message, preview_text)
     """
     
+    print("🔄 translate_document function called!")
+    print(f"📁 Input file: {input_file}")
+    print(f"🌐 Language direction: {language_direction}")
+    
     if input_file is None:
         return None, "❌ Please upload a document first!", ""
     
@@ -50,6 +54,10 @@ def translate_document(input_file, language_direction):
         "English → Polish": ("en", "pl"),
         "Polish → English": ("pl", "en")
     }
+    
+    if language_direction not in lang_map:
+        return None, f"❌ Invalid language direction: {language_direction}", ""
+    
     source_lang, target_lang = lang_map[language_direction]
     
     try:
@@ -161,6 +169,12 @@ def translate_document(input_file, language_direction):
         return None, f"❌ **Error during translation:**\n\n{str(e)}\n\n<details>\n<summary>Technical Details</summary>\n\n```\n{error_details}\n```\n</details>", ""
 
 
+def test_button():
+    """Simple test function to verify button works."""
+    print("🧪 Test button clicked!")
+    return "✅ Button is working!"
+
+
 # Create Gradio interface
 with gr.Blocks(title="IntraLingo - Document Translation", theme=gr.themes.Soft()) as demo:
     
@@ -211,6 +225,7 @@ with gr.Blocks(title="IntraLingo - Document Translation", theme=gr.themes.Soft()
             )
             
             translate_btn = gr.Button("🔄 Translate Document", variant="primary", size="lg")
+            test_btn = gr.Button("🧪 Test Button", variant="secondary", size="sm")
         
         with gr.Column(scale=1):
             # Output section
@@ -227,11 +242,21 @@ with gr.Blocks(title="IntraLingo - Document Translation", theme=gr.themes.Soft()
     with gr.Row():
         preview_box = gr.Markdown("", label="Translation Preview")
     
-    # Connect the button
+    # Test section (for debugging)
+    with gr.Row():
+        test_output = gr.Markdown("")
+    
+    # Connect the buttons
     translate_btn.click(
         fn=translate_document,
         inputs=[input_file, language_direction],
         outputs=[output_file, status_msg, preview_box]
+    )
+    
+    test_btn.click(
+        fn=test_button,
+        inputs=[],
+        outputs=[test_output]
     )
     
     # Footer
