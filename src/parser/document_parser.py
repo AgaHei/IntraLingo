@@ -330,11 +330,12 @@ class DocumentParser:
         """Apply appropriate font size based on style."""
         try:
             from docx.shared import Pt
-            if style_name in ['Heading 1', 'Title']:
+            # Ensure style_name is a string to avoid "bool is not iterable" error
+            if isinstance(style_name, str) and style_name in ['Heading 1', 'Title']:
                 run.font.size = Pt(16)
-            elif style_name in ['Heading 2']:
+            elif isinstance(style_name, str) and style_name in ['Heading 2']:
                 run.font.size = Pt(14)
-            elif style_name in ['Heading 3']:
+            elif isinstance(style_name, str) and style_name in ['Heading 3']:
                 run.font.size = Pt(13)
             else:
                 run.font.size = Pt(11)  # Standard document size
