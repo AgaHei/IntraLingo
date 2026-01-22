@@ -297,45 +297,49 @@ class DocumentParser:
                 if run_data['font_size'] is not None:
                     original_size = run_data['font_size']
                     
-                    # Convert from twips to points (1 point = 20 twips)
+                    # Handle different font size formats
                     if hasattr(original_size, 'pt'):
                         # Already a Pt object
                         run.font.size = original_size
                     elif isinstance(original_size, (int, float)):
-                        if original_size > 1000:  # If it's in twips (very large number)
+                        # Convert to reasonable point size
+                        if original_size > 1000:  # Likely in twips
                             size_in_points = original_size / 20
-                        else:  # Already in points or other unit
+                        elif original_size > 100:  # Likely in half-points or other unit
+                            size_in_points = original_size / 2
+                        else:  # Already in points
                             size_in_points = original_size
                         
-                        # Only use the original size if it's reasonable (between 6 and 72 points)
-                        if 6 <= size_in_points <= 72:
-                            run.font.size = Pt(size_in_points)
-                        else:
-                            # Use default based on style
-                            if para_data['style'] in ['Heading 1', 'Title']:
-                                run.font.size = Pt(16)
-                            elif para_data['style'] in ['Heading 2']:
-                                run.font.size = Pt(14)
-                            elif para_data['style'] in ['Heading 3']:
-                                run.font.size = Pt(13)
-                            else:
-                                run.font.size = Pt(11)  # Standard document size
+                        # Ensure reasonable size (6-72 points)
+                        size_in_points = max(6, min(72, size_in_points))
+                        run.font.size = Pt(size_in_points)
+                    else:
+                        # Use style defaults
+                        self._apply_style_font_size(run, para_data['style'])
                 else:
                     # Font size is None - use style-appropriate defaults
-                    if para_data['style'] in ['Heading 1', 'Title']:
-                        run.font.size = Pt(16)
-                    elif para_data['style'] in ['Heading 2']:
-                        run.font.size = Pt(14)
-                    elif para_data['style'] in ['Heading 3']:
-                        run.font.size = Pt(13)
-                    else:
-                        run.font.size = Pt(11)
+                    self._apply_style_font_size(run, para_data['style'])
             except Exception as e:
                 # Fallback to default
                 try:
                     run.font.size = Pt(11)
                 except:
                     pass
+                    
+    def _apply_style_font_size(self, run, style_name):
+        """Apply appropriate font size based on style."""
+        try:
+            from docx.shared import Pt
+            if style_name in ['Heading 1', 'Title']:
+                run.font.size = Pt(16)
+            elif style_name in ['Heading 2']:
+                run.font.size = Pt(14)
+            elif style_name in ['Heading 3']:
+                run.font.size = Pt(13)
+            else:
+                run.font.size = Pt(11)  # Standard document size
+        except:
+            pass
     
     def _reconstruct_table(self, doc, table_data):
         """

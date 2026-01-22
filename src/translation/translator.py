@@ -44,22 +44,21 @@ class NLLBTranslator:
         else:
             self.device = device
             
-        # Model priority: Base model first for reliability, then try fine-tuned
+        # Model priority: Try fine-tuned model first, fallback to base model
         import os
         
-        # Start with base model to ensure reliability
-        self.model_name = 'facebook/nllb-200-distilled-600M'
-        print("✓ Using BASE NLLB model (most reliable)")
-        
-        # Optionally try fine-tuned model (commented out for now due to tokenizer issues)
-        # try:
-        #     hub_model_name = "AgaHei/AH-nllb-finetuned-business-en-pl"
-        #     from transformers import AutoConfig
-        #     AutoConfig.from_pretrained(hub_model_name)
-        #     self.model_name = hub_model_name
-        #     print(f"✓ Using HuggingFace Hub model: {hub_model_name}")
-        # except Exception as e:
-        #     print(f"⚠ Hub model not accessible, using base model instead")
+        # Try fine-tuned model first for better quality
+        try:
+            hub_model_name = "AgaHei/AH-nllb-finetuned-business-en-pl"
+            from transformers import AutoConfig
+            # Test if model is accessible
+            AutoConfig.from_pretrained(hub_model_name)
+            self.model_name = hub_model_name
+            print(f"✓ Using FINE-TUNED model: {hub_model_name}")
+        except Exception as e:
+            print(f"⚠ Fine-tuned model not accessible ({str(e)}), using base model")
+            self.model_name = 'facebook/nllb-200-distilled-600M'
+            print("✓ Using BASE NLLB model (fallback)")
         
         # NLLB language codes (different from simple 2-letter codes)
         self.lang_codes = self._get_nllb_lang_codes()
