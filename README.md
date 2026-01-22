@@ -176,7 +176,7 @@ For inquiries about:
 
 ## 🔄 Version
 
-**Current Version:** 1.0.0 (Demo)  
+**Current Version:** 1.0.0 (Demo - Jan 22)  
 **Last Updated:** January 2026  
 **Model Version:** nllb-finetuned-business-en-pl-v3
 
