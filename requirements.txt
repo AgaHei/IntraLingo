@@ -1,0 +1,7 @@
+python-docx
+transformers
+torch
+sentencepiece
+sacremoses
+gradio
+accelerate
