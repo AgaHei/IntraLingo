@@ -30,14 +30,13 @@ def get_translator(source_lang, target_lang):
     return translator_cache[cache_key]
 
 
-def translate_document(input_file, language_direction, progress=gr.Progress()):
+def translate_document(input_file, language_direction):
     """
     Main translation function for Gradio.
     
     Args:
         input_file: Uploaded file object from Gradio
         language_direction: String like "English → Polish"
-        progress: Gradio progress tracker
     
     Returns:
         Tuple: (output_file_path, status_message, preview_text)
@@ -54,17 +53,20 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
     source_lang, target_lang = lang_map[language_direction]
     
     try:
+        print(f"🔄 Starting translation: {language_direction}")
+        print(f"📁 Input file: {input_file.name}")
+        
         # Check file size (max 10MB)
         file_size = os.path.getsize(input_file.name)
         if file_size > 10 * 1024 * 1024:
             return None, f"❌ File too large! Maximum: 10MB. Your file: {file_size/1024/1024:.1f}MB", ""
         
-        progress(0.1, desc="🔄 Loading translator...")
+        print("🔄 Loading translator...")
         
         # Get translator
         translator = get_translator(source_lang, target_lang)
         
-        progress(0.2, desc="📄 Parsing document...")
+        print("📄 Parsing document...")
         
         # Parse document
         parser = DocumentParser(input_file.name)
@@ -73,7 +75,7 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
         para_count = sum(1 for block in parsed_content if block['type'] == 'paragraph')
         table_count = sum(1 for block in parsed_content if block['type'] == 'table')
         
-        progress(0.3, desc=f"✓ Parsed {para_count} paragraphs, {table_count} tables")
+        print(f"✓ Parsed {para_count} paragraphs, {table_count} tables")
         
         # Translation function
         def translate_text(text):
@@ -81,14 +83,15 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
                 return text
             return translator.translate_text(text)
         
-        # Translate with progress
+        print("🌐 Starting translation...")
+        
+        # Translate with status updates
         translated_content = []
         total_blocks = len(parsed_content)
         
         for i, block in enumerate(parsed_content):
-            # Update progress
-            progress_val = 0.3 + (i / total_blocks) * 0.5
-            progress(progress_val, desc=f"🌐 Translating block {i+1}/{total_blocks}...")
+            if i % 10 == 0:  # Log progress every 10 blocks
+                print(f"🌐 Translating block {i+1}/{total_blocks}...")
             
             # Translate block
             if block['type'] == 'paragraph':
@@ -97,7 +100,6 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
                 for run in translated_block['runs']:
                     run['text'] = translate_text(run['text'])
                 translated_content.append(translated_block)
-            
             elif block['type'] == 'table':
                 import copy
                 translated_block = copy.deepcopy(block)
@@ -108,7 +110,7 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
                                 run['text'] = translate_text(run['text'])
                 translated_content.append(translated_block)
         
-        progress(0.8, desc="📝 Reconstructing document...")
+        print("📝 Reconstructing document...")
         
         # Create output file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_file:
@@ -117,7 +119,7 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
         # Reconstruct document
         parser.reconstruct(translated_content, output_path)
         
-        progress(1.0, desc="✅ Complete!")
+        print("✅ Translation complete!")
         
         # Get sample translations for preview
         preview_lines = []
@@ -154,6 +156,8 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
+        print(f"❌ ERROR during translation: {str(e)}")
+        print(f"Full traceback: {error_details}")
         return None, f"❌ **Error during translation:**\n\n{str(e)}\n\n<details>\n<summary>Technical Details</summary>\n\n```\n{error_details}\n```\n</details>", ""
 
 
