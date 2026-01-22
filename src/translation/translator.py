@@ -8,16 +8,6 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import torch
 from typing import List, Union
 
-# Simple print functions for user feedback
-def log_info(text):
-    print(text)
-
-def log_error(text):
-    print(f"ERROR: {text}")
-
-def log_warning(text):
-    print(f"WARNING: {text}")
-
 
 class NLLBTranslator:
     """
@@ -34,6 +24,8 @@ class NLLBTranslator:
             target_lang: Target language code ('pl' or 'en')
             device: Device to run model on ('cuda', 'cpu', or None for auto-detect)
         """
+        import os
+        
         self.source_lang = source_lang
         self.target_lang = target_lang
         
@@ -42,48 +34,26 @@ class NLLBTranslator:
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         else:
             self.device = device
-            
-        # Model priority: Try fine-tuned model first, fallback to base model
-        import os
         
-        # Try fine-tuned model first for better quality
-        try:
-            hub_model_name = "AgaHei/AH-nllb-finetuned-business-en-pl"
-            from transformers import AutoConfig
-            # Test if model is accessible
-            AutoConfig.from_pretrained(hub_model_name)
-            self.model_name = hub_model_name
-            print(f"✓ Using FINE-TUNED model: {hub_model_name}")
-        except Exception as e:
-            print(f"⚠ Fine-tuned model not accessible ({str(e)}), using base model")
-            self.model_name = 'facebook/nllb-200-distilled-600M'
-            print("✓ Using BASE NLLB model (fallback)")
+        # Use fine-tuned model from HuggingFace Hub
+        self.model_name = 'AgaHei/AH-nllb-finetuned-business-en-pl'
+        print(f"✅ Using FINE-TUNED model from HuggingFace Hub: {self.model_name}")
         
         # NLLB language codes (different from simple 2-letter codes)
         self.lang_codes = self._get_nllb_lang_codes()
         
-        # Load model and tokenizer with error handling
-        try:
-            log_info("🔄 Loading translation model... (this may take a few minutes on first use)")
-            
-            # Use CPU only to reduce memory usage
-            torch.set_default_dtype(torch.float32)
-            
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
-                self.model_name,
-                torch_dtype=torch.float32  # Use float32 for CPU
-            )
-            self.model.to(self.device)
-            self.model.eval()  # Set to evaluation mode
-            
-            log_info("✓ Model loaded successfully!")
-            print("✓ Model loaded successfully!")
-            
-        except Exception as e:
-            log_error(f"❌ Error loading model: {str(e)}")
-            log_info("💡 Try refreshing the page or contact support if the issue persists.")
-            raise e
+        print(f"\n📦 Loading model...")
+        print(f"   Model: {os.path.basename(self.model_name) if '/' not in self.model_name else self.model_name}")
+        print(f"   Translation: {source_lang.upper()} → {target_lang.upper()}")
+        print(f"   Device: {self.device}")
+        
+        # Load model and tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
+        self.model.to(self.device)
+        self.model.eval()  # Set to evaluation mode
+        
+        print("✅ Model loaded successfully!\n")
     
     def _get_nllb_lang_codes(self):
         """
@@ -158,9 +128,8 @@ class NLLBTranslator:
         src_lang_code = self.lang_codes[self.source_lang]
         tgt_lang_code = self.lang_codes[self.target_lang]
         
-        # Set source and target languages for tokenizer
+        # Set source language for tokenizer
         self.tokenizer.src_lang = src_lang_code
-        self.tokenizer.tgt_lang = tgt_lang_code
         
         # Tokenize
         inputs = self.tokenizer(
@@ -171,23 +140,19 @@ class NLLBTranslator:
             max_length=max_length
         ).to(self.device)
         
+        # Get forced_bos_token_id - handle different tokenizer types
+        try:
+            # Try using lang_code_to_id (some tokenizers)
+            forced_bos_token_id = self.tokenizer.lang_code_to_id[tgt_lang_code]
+        except (AttributeError, KeyError):
+            # Fallback: convert language code token to id
+            forced_bos_token_id = self.tokenizer.convert_tokens_to_ids(tgt_lang_code)
+        
         # Generate translations with forced target language
         with torch.no_grad():
-            # Get the target language token ID correctly for NLLB
-            try:
-                # Try the newer method first
-                if hasattr(self.tokenizer, 'lang_code_to_id'):
-                    tgt_lang_id = self.tokenizer.lang_code_to_id[tgt_lang_code]
-                else:
-                    # Fallback method for different tokenizer versions
-                    tgt_lang_id = self.tokenizer.convert_tokens_to_ids(tgt_lang_code)
-            except (KeyError, AttributeError):
-                # Ultimate fallback - use a known Polish token ID
-                tgt_lang_id = self.tokenizer.convert_tokens_to_ids("pol_Latn")
-            
             translated = self.model.generate(
                 **inputs,
-                forced_bos_token_id=tgt_lang_id,
+                forced_bos_token_id=forced_bos_token_id,
                 max_length=max_length
             )
         
@@ -223,6 +188,28 @@ class NLLBTranslator:
             return translation
         else:
             return self.translate(text, max_length=max_length)
+    
+    def translate_document(self, parsed_document):
+        """
+        Translate a parsed document structure for compatibility with existing app.
+        """
+        def translate_element(element):
+            if isinstance(element, dict):
+                translated = {}
+                for key, value in element.items():
+                    if key == 'text' and isinstance(value, str):
+                        translated[key] = self.translate(value)
+                    elif isinstance(value, (dict, list)):
+                        translated[key] = translate_element(value)
+                    else:
+                        translated[key] = value
+                return translated
+            elif isinstance(element, list):
+                return [translate_element(item) for item in element]
+            else:
+                return element
+        
+        return translate_element(parsed_document)
 
 
 class TranslationPipeline:
@@ -270,6 +257,12 @@ class TranslationPipeline:
             List of translated strings
         """
         return self.translator.translate(texts)
+    
+    def translate_document(self, parsed_document):
+        """
+        Translate a parsed document structure.
+        """
+        return self.translator.translate_document(parsed_document)
 
 
 def create_translator(source_lang='en', target_lang='pl'):

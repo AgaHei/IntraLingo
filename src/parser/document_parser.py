@@ -90,56 +90,37 @@ class DocumentParser:
                 'type': 'paragraph',
                 'style': style name,
                 'alignment': alignment,
-                'spacing_before': spacing before,
-                'spacing_after': spacing after,
-                'line_spacing': line spacing,
                 'runs': list of run dictionaries
             }
         """
         runs_data = []
         
+        # Get the default font size from the paragraph's style if available
+        style_font_size = None
+        try:
+            if para.style.font.size is not None:
+                style_font_size = para.style.font.size
+        except:
+            pass
+        
         for run in para.runs:
-            # Capture more font properties
+            # Use run's font size if explicitly set, otherwise use style's font size
+            font_size = run.font.size if run.font.size is not None else style_font_size
+            
             run_data = {
                 'text': run.text,
                 'bold': run.bold,
                 'italic': run.italic,
                 'underline': run.underline,
-                'font_size': run.font.size,
+                'font_size': font_size,
                 'font_name': run.font.name
             }
-            
-            # Capture font color if available
-            try:
-                if run.font.color.rgb:
-                    run_data['font_color'] = run.font.color.rgb
-            except:
-                pass
-                
             runs_data.append(run_data)
-
-        # Capture paragraph spacing
-        spacing_before = None
-        spacing_after = None
-        line_spacing = None
         
-        try:
-            if para.paragraph_format.space_before:
-                spacing_before = para.paragraph_format.space_before
-            if para.paragraph_format.space_after:
-                spacing_after = para.paragraph_format.space_after
-            if para.paragraph_format.line_spacing:
-                line_spacing = para.paragraph_format.line_spacing
-        except:
-            pass
-
         return {
             'type': 'paragraph',
             'style': para.style.name,
             'alignment': para.alignment,
-            'spacing_before': spacing_before,
-            'spacing_after': spacing_after, 
-            'line_spacing': line_spacing,
             'runs': runs_data
         }
     
@@ -192,7 +173,7 @@ class DocumentParser:
         # Copy styles from original document
         self._copy_styles(new_doc)
         
-        for i, block in enumerate(translated_content):
+        for block in translated_content:
             if block['type'] == 'paragraph':
                 self._reconstruct_paragraph(new_doc, block)
             elif block['type'] == 'table':
@@ -203,25 +184,9 @@ class DocumentParser:
     
     def _copy_styles(self, new_doc):
         """Copy styles from original document to new document."""
-        # Copy built-in styles and custom styles
-        try:
-            for style in self.doc.styles:
-                if style.name not in [s.name for s in new_doc.styles]:
-                    try:
-                        # Create new style with same properties
-                        if style.type == 1:  # Paragraph style
-                            new_style = new_doc.styles.add_style(style.name, 1)
-                            if hasattr(style, 'font'):
-                                new_style.font.name = style.font.name
-                                new_style.font.size = style.font.size
-                                new_style.font.bold = style.font.bold
-                                new_style.font.italic = style.font.italic
-                    except:
-                        # Skip if style creation fails
-                        continue
-        except:
-            # If style copying fails, continue with defaults
-            pass
+        # This is a simplified version - python-docx style copying is complex
+        # For MVP, we'll rely on default styles matching
+        pass
     
     def _reconstruct_paragraph(self, doc, para_data):
         """
@@ -232,115 +197,26 @@ class DocumentParser:
             para_data: Parsed paragraph data dictionary
         """
         para = doc.add_paragraph()
+        para.style = para_data['style']
         
-        # Try to set style, but handle errors gracefully
-        try:
-            para.style = para_data['style']
-        except Exception:
-            # Use default style if there's an error
-            pass
-        
-        # Set alignment
         if para_data['alignment'] is not None:
             para.alignment = para_data['alignment']
-            
-        # Set paragraph spacing
-        try:
-            if para_data.get('spacing_before'):
-                para.paragraph_format.space_before = para_data['spacing_before']
-            if para_data.get('spacing_after'):
-                para.paragraph_format.space_after = para_data['spacing_after'] 
-            if para_data.get('line_spacing'):
-                para.paragraph_format.line_spacing = para_data['line_spacing']
-        except:
-            pass
         
         # Add runs with formatting
         for run_data in para_data['runs']:
             run = para.add_run(run_data['text'])
             
-            # Apply formatting safely
+            # Apply formatting
             if run_data['bold'] is not None:
-                try:
-                    run.bold = run_data['bold']
-                except:
-                    pass
+                run.bold = run_data['bold']
             if run_data['italic'] is not None:
-                try:
-                    run.italic = run_data['italic']
-                except:
-                    pass
+                run.italic = run_data['italic']
             if run_data['underline'] is not None:
-                try:
-                    run.underline = run_data['underline']
-                except:
-                    pass
-                    
-            # Apply font name
-            if run_data.get('font_name'):
-                try:
-                    run.font.name = run_data['font_name']
-                except:
-                    pass
-                    
-            # Apply font color
-            if run_data.get('font_color'):
-                try:
-                    run.font.color.rgb = run_data['font_color']
-                except:
-                    pass
-            
-            # Handle font size properly
-            try:
-                from docx.shared import Pt
-                
-                if run_data['font_size'] is not None:
-                    original_size = run_data['font_size']
-                    
-                    # Handle different font size formats
-                    if hasattr(original_size, 'pt'):
-                        # Already a Pt object
-                        run.font.size = original_size
-                    elif isinstance(original_size, (int, float)):
-                        # Convert to reasonable point size
-                        if original_size > 1000:  # Likely in twips
-                            size_in_points = original_size / 20
-                        elif original_size > 100:  # Likely in half-points or other unit
-                            size_in_points = original_size / 2
-                        else:  # Already in points
-                            size_in_points = original_size
-                        
-                        # Ensure reasonable size (6-72 points)
-                        size_in_points = max(6, min(72, size_in_points))
-                        run.font.size = Pt(size_in_points)
-                    else:
-                        # Use style defaults
-                        self._apply_style_font_size(run, para_data['style'])
-                else:
-                    # Font size is None - use style-appropriate defaults
-                    self._apply_style_font_size(run, para_data['style'])
-            except Exception as e:
-                # Fallback to default
-                try:
-                    run.font.size = Pt(11)
-                except:
-                    pass
-                    
-    def _apply_style_font_size(self, run, style_name):
-        """Apply appropriate font size based on style."""
-        try:
-            from docx.shared import Pt
-            # Ensure style_name is a string to avoid "bool is not iterable" error
-            if isinstance(style_name, str) and style_name in ['Heading 1', 'Title']:
-                run.font.size = Pt(16)
-            elif isinstance(style_name, str) and style_name in ['Heading 2']:
-                run.font.size = Pt(14)
-            elif isinstance(style_name, str) and style_name in ['Heading 3']:
-                run.font.size = Pt(13)
-            else:
-                run.font.size = Pt(11)  # Standard document size
-        except:
-            pass
+                run.underline = run_data['underline']
+            if run_data['font_size'] is not None:
+                run.font.size = run_data['font_size']
+            if run_data['font_name'] is not None:
+                run.font.name = run_data['font_name']
     
     def _reconstruct_table(self, doc, table_data):
         """
@@ -353,9 +229,6 @@ class DocumentParser:
         # Create table with correct dimensions
         table = doc.add_table(rows=table_data['num_rows'], 
                              cols=table_data['num_cols'])
-        
-        # Apply basic table styling
-        table.style = 'Table Grid'  # Ensures visible borders
         
         # Fill table cells
         for i, row_data in enumerate(table_data['rows']):
@@ -370,77 +243,30 @@ class DocumentParser:
                     if k == 0:
                         # Use existing first paragraph
                         para = cell.paragraphs[0]
-                        try:
-                            para.style = para_data['style']
-                        except:
-                            pass
+                        para.style = para_data['style']
                         if para_data['alignment'] is not None:
                             para.alignment = para_data['alignment']
-                            
-                        # Apply paragraph spacing
-                        try:
-                            if para_data.get('spacing_before'):
-                                para.paragraph_format.space_before = para_data['spacing_before']
-                            if para_data.get('spacing_after'):
-                                para.paragraph_format.space_after = para_data['spacing_after'] 
-                        except:
-                            pass
                     else:
                         # Add new paragraph
                         para = cell.add_paragraph()
-                        try:
-                            para.style = para_data['style']
-                        except:
-                            pass
+                        para.style = para_data['style']
                         if para_data['alignment'] is not None:
                             para.alignment = para_data['alignment']
                     
-                    # Add runs with full formatting
+                    # Add runs
                     for run_data in para_data['runs']:
                         run = para.add_run(run_data['text'])
                         
-                        # Apply all formatting properties
                         if run_data['bold'] is not None:
-                            try:
-                                run.bold = run_data['bold']
-                            except:
-                                pass
+                            run.bold = run_data['bold']
                         if run_data['italic'] is not None:
-                            try:
-                                run.italic = run_data['italic']
-                            except:
-                                pass
+                            run.italic = run_data['italic']
                         if run_data['underline'] is not None:
-                            try:
-                                run.underline = run_data['underline']
-                            except:
-                                pass
-                        if run_data.get('font_name'):
-                            try:
-                                run.font.name = run_data['font_name']
-                            except:
-                                pass
-                        if run_data.get('font_color'):
-                            try:
-                                run.font.color.rgb = run_data['font_color']
-                            except:
-                                pass
-                        
-                        # Handle font size
-                        try:
-                            from docx.shared import Pt
-                            if run_data['font_size'] is not None:
-                                if hasattr(run_data['font_size'], 'pt'):
-                                    run.font.size = run_data['font_size']
-                                else:
-                                    # Convert to appropriate size
-                                    size = run_data['font_size']
-                                    if isinstance(size, (int, float)) and 6 <= size <= 72:
-                                        run.font.size = Pt(size)
-                                    elif size > 1000:  # Likely twips
-                                        run.font.size = Pt(size / 20)
-                        except:
-                            pass
+                            run.underline = run_data['underline']
+                        if run_data['font_size'] is not None:
+                            run.font.size = run_data['font_size']
+                        if run_data['font_name'] is not None:
+                            run.font.name = run_data['font_name']
 
 
 def dummy_translate_text(text):
