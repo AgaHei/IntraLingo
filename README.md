@@ -14,7 +14,7 @@ license: mit
 
 **Professional English ↔ Polish translation with complete format preservation**
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://huggingface.co/spaces/AgaHei/intralingo)
+[![Gradio App](https://img.shields.io/badge/🤗%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/AgaHei/IntraLingo)
 
 ---
 
@@ -78,7 +78,7 @@ IntraLingo uses **NLLB-200** (No Language Left Behind) by Meta AI:
 
 - **python-docx**: Document parsing and reconstruction
 - **Transformers**: Hugging Face library for NLLB model
-- **Streamlit**: Web interface
+- **Gradio**: Web interface
 
 ---
 
@@ -147,7 +147,7 @@ The project demonstrates how modern neural machine translation can be customized
 ### Libraries
 - [Hugging Face Transformers](https://github.com/huggingface/transformers)
 - [python-docx](https://github.com/python-openxml/python-docx)
-- [Streamlit](https://streamlit.io/)
+- [Gradio](https://gradio.app/)
 
 ### Dataset
 Fine-tuned on custom business correspondence dataset (English-Polish parallel texts)
