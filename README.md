@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](/)
 [![License](https://img.shields.io/badge/License-Portfolio-lightgrey?style=for-the-badge)](/)
 
-*Developed by Agnès Heijligers | ML Engineer & Former Professional Translator*
+*Developed by Agnès Heijligers | transitioning to ML Engineer & Former Professional Translator*
 
 ---
 
