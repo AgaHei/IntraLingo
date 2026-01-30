@@ -80,7 +80,101 @@ class NLLBTranslator:
         
         # Decode
         translation = self.tokenizer.batch_decode(translated, skip_special_tokens=True)[0]
+        
+        # Apply post-processing for PL→EN translations
+        if self.source_lang == 'pl' and self.target_lang == 'en':
+            translation = self._post_process_pl_to_en(translation)
+        
+        # Apply post-processing for EN→PL translations
+        elif self.source_lang == 'en' and self.target_lang == 'pl':
+            translation = self._post_process_en_to_pl(translation)
+        
         return translation
+    
+    def _post_process_pl_to_en(self, text):
+        """
+        Post-process Polish→English translations to fix common issues.
+        Makes translations sound more natural to English speakers.
+        """
+        import re
+        
+        # Fix overly formal salutations
+        text = re.sub(r'\bHonourable Mr\b', 'Dear Mr', text)
+        text = re.sub(r'\bHonourable Mrs\b', 'Dear Mrs', text)
+        text = re.sub(r'\bHonourable Ms\b', 'Dear Ms', text)
+        text = re.sub(r'\bHonourable Miss\b', 'Dear Miss', text)
+        text = re.sub(r'\bRespected Sir\b', 'Dear Sir', text)
+        text = re.sub(r'\bRespected Madam\b', 'Dear Madam', text)
+        text = re.sub(r'\bEsteemed Sir\b', 'Dear Sir', text)
+        text = re.sub(r'\bEsteemed Madam\b', 'Dear Madam', text)
+        text = re.sub(r'\bDear Ladies and Gentlemen\b', 'Dear Sir or Madam', text)
+        
+        # Fix overly formal closings
+        text = re.sub(r'\bWith respect,?\b', 'Kind regards,', text)
+        text = re.sub(r'\bRespectfully yours,?\b', 'Yours sincerely,', text)
+        text = re.sub(r'\bWith esteem,?\b', 'Best regards,', text)
+        text = re.sub(r'\bRespectful greetings,?\b', 'Kind regards,', text)
+        
+        # Fix word order issues common in PL→EN
+        text = re.sub(r'\bI request kindly\b', 'I kindly request', text)
+        text = re.sub(r'\bWe request kindly\b', 'We kindly request', text)
+        text = re.sub(r'\bPlease to confirm\b', 'Please confirm', text)
+        text = re.sub(r'\bPlease to provide\b', 'Please provide', text)
+        text = re.sub(r'\bPlease to send\b', 'Please send', text)
+        
+        # Fix common awkward phrases
+        text = re.sub(r'\bI am asking\b', 'I would like to ask', text)
+        text = re.sub(r'\bWe are asking\b', 'We would like to ask', text)
+        text = re.sub(r'\bI am requesting\b', 'I would like to request', text)
+        text = re.sub(r'\bWe are requesting\b', 'We would like to request', text)
+        
+        # Fix "thank you in advance" variations
+        text = re.sub(r'\bThank you in forward\b', 'Thank you in advance', text)
+        text = re.sub(r'\bThanks in forward\b', 'Thanks in advance', text)
+        text = re.sub(r'\bThank you earlier\b', 'Thank you in advance', text)
+        
+        # Fix "looking forward" variations
+        text = re.sub(r'\bI am waiting for\b', 'I look forward to', text)
+        text = re.sub(r'\bWe are waiting for\b', 'We look forward to', text)
+        
+        return text
+    
+    def _post_process_en_to_pl(self, text):
+        """
+        Post-process English→Polish translations to fix common issues.
+        Makes translations sound more natural to Polish speakers.
+        """
+        import re
+        
+        # Fix closing formulas - replace awkward translations with proper Polish business closings
+        text = re.sub(r'\bUprzejmie pozdrowione\b', 'Łączymy pozdrowienia', text)
+        text = re.sub(r'\bUprzejme pozdrowienia\b', 'Łączymy pozdrowienia', text)
+        text = re.sub(r'\bMiłe pozdrowienia\b', 'Łączymy pozdrowienia', text)
+        text = re.sub(r'\bSerdeczne pozdrowienia\b', 'Łączymy pozdrowienia', text)
+        
+        # Fix overly formal salutations that sound unnatural in Polish business context
+        text = re.sub(r'\bSzanowny Panie i Pani\b', 'Szanowni Państwo', text)
+        text = re.sub(r'\bDrogi Panie lub Pani\b', 'Szanowni Państwo', text)
+        
+        # Fix awkward "please" translations
+        text = re.sub(r'\bproszę potwierdzić\b', 'prosimy o potwierdzenie', text)
+        text = re.sub(r'\bproszę wysłać\b', 'prosimy o przesłanie', text)
+        text = re.sub(r'\bproszę dostarczyć\b', 'prosimy o dostarczenie', text)
+        
+        # Fix "thank you in advance" - common awkward translation
+        text = re.sub(r'\bdziękuję z góry\b', 'z góry dziękuję', text)
+        text = re.sub(r'\bdzięki z góry\b', 'z góry dziękuję', text)
+        
+        # Fix "I would like to" constructions that sound too formal/awkward
+        text = re.sub(r'\bchciałbym prosić o\b', 'proszę o', text)
+        text = re.sub(r'\bchciałabym prosić o\b', 'proszę o', text)
+        text = re.sub(r'\bchcielibyśmy prosić o\b', 'prosimy o', text)
+        
+        # Fix "looking forward" awkward translations
+        text = re.sub(r'\bczekam na\b', 'oczekuję', text)
+        text = re.sub(r'\bczekamy na\b', 'oczekujemy', text)
+        
+        return text
 
 
 # ============================================================================
@@ -434,7 +528,7 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
 # GRADIO INTERFACE
 # ============================================================================
 
-with gr.Blocks(title="IntraLingo", theme=gr.themes.Soft()) as demo:
+with gr.Blocks(title="IntraLingo") as demo:
     
     gr.Markdown("""
     # 🌐 IntraLingo
@@ -489,4 +583,4 @@ with gr.Blocks(title="IntraLingo", theme=gr.themes.Soft()) as demo:
 
 if __name__ == "__main__":
     demo.queue()
-    demo.launch()
+    demo.launch(theme=gr.themes.Soft())
