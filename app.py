@@ -29,8 +29,9 @@ class NLLBTranslator:
         self.target_lang = target_lang
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
-        # Use fine-tuned model from HuggingFace Hub
-        self.model_name = 'AgaHei/AH-nllb-finetuned-business-en-pl'
+        # TEMP FIX: Use base NLLB model due to fine-tuned model quality issues
+        # Original: 'AgaHei/AH-nllb-finetuned-business-en-pl' 
+        self.model_name = 'facebook/nllb-200-distilled-600M'
         
         print(f"🔄 Loading model: {self.model_name}")
         print(f"   Device: {self.device}")
@@ -157,6 +158,18 @@ class NLLBTranslator:
         Makes translations sound more natural to Polish speakers.
         """
         import re
+        
+        # Fix CRITICAL business terms that often get mistranslated
+        text = re.sub(r'\bREQUEST FOR QUOTATION\b', 'PROŚBA O WYCENĘ', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bQUOTATION REQUEST\b', 'PROŚBA O WYCENĘ', text, flags=re.IGNORECASE)  
+        text = re.sub(r'\bRFQ\b', 'PROŚBA O WYCENĘ', text)
+        text = re.sub(r'\bINDUSTRIAL COMPONENTS\b', 'KOMPONENTY PRZEMYSŁOWE', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bINDUSTRIAL PARTS\b', 'CZĘŚCI PRZEMYSŁOWE', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bSUPPLY CHAIN\b', 'ŁAŃCUCH DOSTAW', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bPROCUREMENT\b', 'ZAMÓWIENIA', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bVENDOR\b', 'DOSTAWCA', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bCOMPLIANCE\b', 'ZGODNOŚĆ', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bSPECIFICATIONS?\b', 'SPECYFIKACJA', text, flags=re.IGNORECASE)
         
         # Fix closing formulas - replace awkward translations with proper Polish business closings
         text = re.sub(r'\bUprzejmie pozdrowione\b', 'Łączymy pozdrowienia', text)
@@ -409,47 +422,42 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
                     # Translate the entire paragraph at once
                     translated_text = translator.translate_text(full_text)
                     
-                    # Redistribute translated text across runs proportionally
-                    # This preserves formatting while maintaining translation quality
+                    # IMPROVED: Simpler, more robust formatting preservation
                     if len(translated_block['runs']) == 1:
                         # Simple case: one run
                         translated_block['runs'][0]['text'] = translated_text
                     else:
-                        # Multiple runs: try to split intelligently
-                        # Calculate character positions based on original runs
-                        original_lengths = [len(run['text']) for run in block['runs']]
-                        total_original = sum(original_lengths)
+                        # Multiple runs: Use improved distribution strategy
+                        original_runs = [run['text'] for run in block['runs']]
                         
-                        if total_original > 0:
-                            # Distribute proportionally
-                            translated_parts = []
-                            current_pos = 0
+                        # Try to preserve formatting by mapping words intelligently
+                        original_words = full_text.split()
+                        translated_words = translated_text.split()
+                        
+                        if len(original_words) > 0 and len(translated_words) > 0:
+                            # Calculate word distribution ratios
+                            word_ratios = []
+                            total_orig_chars = sum(len(run['text']) for run in block['runs'])
                             
-                            for j, orig_len in enumerate(original_lengths):
-                                if j == len(original_lengths) - 1:
-                                    # Last run gets remainder
-                                    part = translated_text[current_pos:]
+                            for run in block['runs']:
+                                if total_orig_chars > 0:
+                                    ratio = len(run['text']) / total_orig_chars
+                                    word_ratios.append(ratio)
                                 else:
-                                    # Calculate proportional length
-                                    proportion = orig_len / total_original
-                                    part_len = int(len(translated_text) * proportion)
-                                    
-                                    # Try to break at word boundary
-                                    if part_len < len(translated_text):
-                                        # Look for space near the break point
-                                        search_range = min(20, part_len // 2)
-                                        best_break = part_len
-                                        for offset in range(-search_range, search_range):
-                                            pos = part_len + offset
-                                            if 0 <= pos < len(translated_text) and translated_text[pos] == ' ':
-                                                best_break = pos
-                                                break
-                                        part_len = best_break
-                                    
-                                    part = translated_text[current_pos:current_pos + part_len]
-                                    current_pos += part_len
+                                    word_ratios.append(0)
+                            
+                            # Distribute words across runs
+                            current_word = 0
+                            for i, ratio in enumerate(word_ratios):
+                                words_for_run = max(1, int(len(translated_words) * ratio))
                                 
-                                translated_block['runs'][j]['text'] = part
+                                if i == len(word_ratios) - 1:  # Last run gets remainder
+                                    run_words = translated_words[current_word:]
+                                else:
+                                    run_words = translated_words[current_word:current_word + words_for_run]
+                                
+                                translated_block['runs'][i]['text'] = ' '.join(run_words)
+                                current_word += len(run_words)
                         else:
                             # Fallback: put everything in first run
                             translated_block['runs'][0]['text'] = translated_text
@@ -469,37 +477,29 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
                             if full_text.strip():
                                 translated_text = translator.translate_text(full_text)
                                 
+                                # IMPROVED: Same robust formatting for table cells
                                 if len(para['runs']) == 1:
                                     para['runs'][0]['text'] = translated_text
                                 else:
-                                    # Distribute across runs
-                                    original_lengths = [len(run['text']) for run in para['runs']]
-                                    total_original = sum(original_lengths)
+                                    # Multiple runs in table cell
+                                    original_words = full_text.split()
+                                    translated_words = translated_text.split()
                                     
-                                    if total_original > 0:
-                                        current_pos = 0
-                                        for j, orig_len in enumerate(original_lengths):
-                                            if j == len(original_lengths) - 1:
-                                                part = translated_text[current_pos:]
+                                    if len(original_words) > 0 and len(translated_words) > 0:
+                                        # Simple word-based distribution for table cells
+                                        words_per_run = max(1, len(translated_words) // len(para['runs']))
+                                        current_word = 0
+                                        
+                                        for j in range(len(para['runs'])):
+                                            if j == len(para['runs']) - 1:  # Last run gets remainder
+                                                run_words = translated_words[current_word:]
                                             else:
-                                                proportion = orig_len / total_original
-                                                part_len = int(len(translated_text) * proportion)
-                                                
-                                                # Word boundary search
-                                                search_range = min(20, part_len // 2)
-                                                best_break = part_len
-                                                for offset in range(-search_range, search_range):
-                                                    pos = part_len + offset
-                                                    if 0 <= pos < len(translated_text) and translated_text[pos] == ' ':
-                                                        best_break = pos
-                                                        break
-                                                part_len = best_break
-                                                
-                                                part = translated_text[current_pos:current_pos + part_len]
-                                                current_pos += part_len
+                                                run_words = translated_words[current_word:current_word + words_per_run]
                                             
-                                            para['runs'][j]['text'] = part
+                                            para['runs'][j]['text'] = ' '.join(run_words)
+                                            current_word += len(run_words)
                                     else:
+                                        # Fallback for table cells
                                         para['runs'][0]['text'] = translated_text
                                         for j in range(1, len(para['runs'])):
                                             para['runs'][j]['text'] = ''
@@ -605,10 +605,10 @@ with gr.Blocks(title="IntraLingo") as demo:
     
     gr.Markdown("""
     ---
-    **Model:** NLLB-200 fine-tuned on EN-PL business correspondence  
+    **Model:** NLLB-200 base model (hotfix for quality issues)  
     **Privacy:** Documents processed in memory only, not stored  
-    **Quality:** BLEU Score 46.31 on business documents  
-    **Version:** 2.1 (April 2026) - Enhanced error handling & pinned dependencies
+    **Quality:** Enhanced with business terminology corrections  
+    **Version:** 2.2 (April 2026) - Base model + improved formatting + business terms fix
     """)
 
 def get_system_info():
