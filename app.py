@@ -34,20 +34,32 @@ class NLLBTranslator:
         
         print(f"🔄 Loading model: {self.model_name}")
         print(f"   Device: {self.device}")
+        print(f"   Python-docx version: {Document.__module__}")
+        print(f"   Transformers version: {AutoTokenizer.__module__}")
+        
+        try:
+            # Load model and tokenizer with explicit error handling
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
+            self.model.to(self.device)
+            self.model.eval()
+            print(f"✅ Model loaded successfully!")
+        except Exception as e:
+            print(f"❌ Model loading failed: {str(e)}")
+            # Fallback to base NLLB model if fine-tuned model fails
+            print("🔄 Trying fallback to base NLLB model...")
+            self.model_name = 'facebook/nllb-200-distilled-600M'
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
+            self.model.to(self.device)
+            self.model.eval()
+            print(f"✅ Fallback model loaded: {self.model_name}")
         
         # Language codes for NLLB
         self.lang_codes = {
             'en': 'eng_Latn',
             'pl': 'pol_Latn'
         }
-        
-        # Load model and tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
-        self.model.to(self.device)
-        self.model.eval()
-        
-        print(f"✅ Model loaded successfully!")
     
     def translate_text(self, text):
         """Translate a single text string."""
@@ -510,6 +522,8 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
             f"- Paragraphs: {para_count}",
             f"- Tables: {table_count}",
             f"- Direction: {source_lang.upper()} → {target_lang.upper()}",
+            f"- Model: {translator.model_name}",
+            f"- Device: {translator.device}",
             "",
             "✅ **Translation complete!** Download your document below."
         ]
@@ -521,7 +535,22 @@ def translate_document(input_file, language_direction, progress=gr.Progress()):
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        return None, f"❌ **Error:** {str(e)}\n\n```\n{error_details}\n```", ""
+        print(f"❌ Translation error: {str(e)}")
+        print(f"   Error details: {error_details}")
+        
+        # Try to provide more specific error information
+        if "CUDA" in str(e) or "device" in str(e).lower():
+            error_msg = f"❌ **Device Error:** {str(e)}\n\n💡 *The app may be trying to use GPU but falling back to CPU. This can affect performance but shouldn't break functionality.*"
+        elif "model" in str(e).lower() or "tokenizer" in str(e).lower():
+            error_msg = f"❌ **Model Loading Error:** {str(e)}\n\n💡 *The fine-tuned model may be temporarily unavailable. Try again in a few minutes.*"
+        elif "memory" in str(e).lower() or "out of memory" in str(e).lower():
+            error_msg = f"❌ **Memory Error:** Document too large or complex.\n\n💡 *Try with a smaller document or simpler formatting.*"
+        elif "docx" in str(e).lower() or "document" in str(e).lower():
+            error_msg = f"❌ **Document Format Error:** {str(e)}\n\n💡 *Ensure your document is a valid .docx file with standard formatting.*"
+        else:
+            error_msg = f"❌ **Error:** {str(e)}\n\n```\n{error_details}\n```"
+        
+        return None, error_msg, ""
 
 
 # ============================================================================
@@ -578,9 +607,28 @@ with gr.Blocks(title="IntraLingo") as demo:
     ---
     **Model:** NLLB-200 fine-tuned on EN-PL business correspondence  
     **Privacy:** Documents processed in memory only, not stored  
-    **Quality:** BLEU Score 46.31 on business documents
+    **Quality:** BLEU Score 46.31 on business documents  
+    **Version:** 2.1 (April 2026) - Enhanced error handling & pinned dependencies
     """)
 
+def get_system_info():
+    """Get system information for debugging."""
+    import torch
+    import transformers
+    import gradio as gr
+    from docx import __version__ as docx_version
+    
+    return f"""
+    **Debug Info:**
+    - Transformers: {transformers.__version__}
+    - PyTorch: {torch.__version__}
+    - Gradio: {gr.__version__}
+    - Python-docx: {docx_version}
+    - CUDA Available: {torch.cuda.is_available()}
+    """
+
 if __name__ == "__main__":
+    print("🚀 Starting IntraLingo...")
+    print(get_system_info())
     demo.queue()
     demo.launch(theme=gr.themes.Soft())
