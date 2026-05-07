@@ -1,634 +1,417 @@
 """
-IntraLingo - Complete Gradio Application
-All-in-one file with translation and parsing functionality
+IntraLingo - Professional Document Translation EN ↔ FR
 """
 
-import gradio as gr
 import os
+import re
+import shutil
 import tempfile
-from pathlib import Path
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+import gradio as gr
 import torch
+from transformers import MarianMTModel, MarianTokenizer
 from docx import Document
-from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
-import copy
 
 
 # ============================================================================
-# TRANSLATOR CLASS
+# GLOSSARY PROCESSOR
 # ============================================================================
 
-class NLLBTranslator:
-    """NLLB translator for English-Polish translation."""
-    
-    def __init__(self, source_lang='en', target_lang='pl'):
+class GlossaryProcessor:
+    """
+    Enforce custom terminology by substituting source terms with opaque
+    placeholders before translation and restoring target terms afterward.
+    MarianMT copies unknown tokens through, making this reliable for
+    proper nouns, brand names, and technical terms.
+    """
+
+    PLACEHOLDER_PATTERN = "TRGLOSS{i}X"
+
+    def __init__(self, glossary_text: str):
+        self.terms: dict[str, str] = {}
+        for line in glossary_text.strip().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "→" in line:
+                parts = line.split("→", 1)
+            elif "->" in line:
+                parts = line.split("->", 1)
+            elif "=" in line:
+                parts = line.split("=", 1)
+            else:
+                continue
+            src = parts[0].strip()
+            tgt = parts[1].strip()
+            if src and tgt:
+                self.terms[src] = tgt
+
+    def encode(self, text: str) -> tuple[str, dict[str, str]]:
+        """Replace source terms with placeholders; return modified text and reverse map."""
+        placeholder_map: dict[str, str] = {}  # placeholder → target term
+        for i, (src_term, tgt_term) in enumerate(self.terms.items()):
+            placeholder = self.PLACEHOLDER_PATTERN.format(i=i)
+            # Case-insensitive replacement, preserve original placeholder casing
+            pattern = re.compile(re.escape(src_term), re.IGNORECASE)
+            if pattern.search(text):
+                text = pattern.sub(placeholder, text)
+                placeholder_map[placeholder] = tgt_term
+        return text, placeholder_map
+
+    def decode(self, text: str, placeholder_map: dict[str, str]) -> tuple[str, int]:
+        """Restore target terms from placeholders; return text and count of replacements."""
+        count = 0
+        for placeholder, tgt_term in placeholder_map.items():
+            # Match placeholder and common casing variants (model may lowercase)
+            variants = [placeholder, placeholder.lower(), placeholder.upper()]
+            for variant in variants:
+                if variant in text:
+                    text = text.replace(variant, tgt_term)
+                    count += 1
+                    break
+        return text, count
+
+
+# ============================================================================
+# MARIAN TRANSLATOR
+# ============================================================================
+
+class MarianTranslator:
+    """Helsinki-NLP MarianMT translator for English ↔ French."""
+
+    MODEL_MAP = {
+        ("en", "fr"): "Helsinki-NLP/opus-mt-tc-big-en-fr",
+        ("fr", "en"): "Helsinki-NLP/opus-mt-tc-big-fr-en",
+    }
+
+    def __init__(self, source_lang: str, target_lang: str):
         self.source_lang = source_lang
         self.target_lang = target_lang
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
-        # TEMP FIX: Use base NLLB model due to fine-tuned model quality issues
-        # Original: 'AgaHei/AH-nllb-finetuned-business-en-pl' 
-        self.model_name = 'facebook/nllb-200-distilled-600M'
-        
-        print(f"🔄 Loading model: {self.model_name}")
-        print(f"   Device: {self.device}")
-        print(f"   Python-docx version: {Document.__module__}")
-        print(f"   Transformers version: {AutoTokenizer.__module__}")
-        
-        try:
-            # Load model and tokenizer with explicit error handling
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
-            self.model.to(self.device)
-            self.model.eval()
-            print(f"✅ Model loaded successfully!")
-        except Exception as e:
-            print(f"❌ Model loading failed: {str(e)}")
-            # Fallback to base NLLB model if fine-tuned model fails
-            print("🔄 Trying fallback to base NLLB model...")
-            self.model_name = 'facebook/nllb-200-distilled-600M'
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
-            self.model.to(self.device)
-            self.model.eval()
-            print(f"✅ Fallback model loaded: {self.model_name}")
-        
-        # Language codes for NLLB
-        self.lang_codes = {
-            'en': 'eng_Latn',
-            'pl': 'pol_Latn'
-        }
-    
-    def translate_text(self, text):
-        """Translate a single text string."""
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model_name = self.MODEL_MAP[(source_lang, target_lang)]
+
+        print(f"Loading {self.model_name} on {self.device}…")
+        self.tokenizer = MarianTokenizer.from_pretrained(self.model_name)
+        self.model = MarianMTModel.from_pretrained(self.model_name)
+        self.model.to(self.device)
+        self.model.eval()
+        print("Model ready.")
+
+    def translate(self, text: str) -> str:
         if not text.strip():
             return text
-        
-        src_code = self.lang_codes[self.source_lang]
-        tgt_code = self.lang_codes[self.target_lang]
-        
-        # Set source language
-        self.tokenizer.src_lang = src_code
-        
-        # Tokenize
-        inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        inputs = self.tokenizer(
+            [text],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512,
+        )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        
-        # Get target language token ID
-        try:
-            forced_bos_token_id = self.tokenizer.lang_code_to_id[tgt_code]
-        except (AttributeError, KeyError):
-            forced_bos_token_id = self.tokenizer.convert_tokens_to_ids(tgt_code)
-        
-        # Generate translation
         with torch.no_grad():
-            translated = self.model.generate(
-                **inputs,
-                forced_bos_token_id=forced_bos_token_id,
-                max_length=512
-            )
-        
-        # Decode
-        translation = self.tokenizer.batch_decode(translated, skip_special_tokens=True)[0]
-        
-        # Apply post-processing for PL→EN translations
-        if self.source_lang == 'pl' and self.target_lang == 'en':
-            translation = self._post_process_pl_to_en(translation)
-        
-        # Apply post-processing for EN→PL translations
-        elif self.source_lang == 'en' and self.target_lang == 'pl':
-            translation = self._post_process_en_to_pl(translation)
-        
-        return translation
-    
-    def _post_process_pl_to_en(self, text):
-        """
-        Post-process Polish→English translations to fix common issues.
-        Makes translations sound more natural to English speakers.
-        """
-        import re
-        
-        # Fix overly formal salutations
-        text = re.sub(r'\bHonourable Mr\b', 'Dear Mr', text)
-        text = re.sub(r'\bHonourable Mrs\b', 'Dear Mrs', text)
-        text = re.sub(r'\bHonourable Ms\b', 'Dear Ms', text)
-        text = re.sub(r'\bHonourable Miss\b', 'Dear Miss', text)
-        text = re.sub(r'\bRespected Sir\b', 'Dear Sir', text)
-        text = re.sub(r'\bRespected Madam\b', 'Dear Madam', text)
-        text = re.sub(r'\bEsteemed Sir\b', 'Dear Sir', text)
-        text = re.sub(r'\bEsteemed Madam\b', 'Dear Madam', text)
-        text = re.sub(r'\bDear Ladies and Gentlemen\b', 'Dear Sir or Madam', text)
-        
-        # Fix overly formal closings
-        text = re.sub(r'\bWith respect,?\b', 'Kind regards,', text)
-        text = re.sub(r'\bRespectfully yours,?\b', 'Yours sincerely,', text)
-        text = re.sub(r'\bWith esteem,?\b', 'Best regards,', text)
-        text = re.sub(r'\bRespectful greetings,?\b', 'Kind regards,', text)
-        
-        # Fix word order issues common in PL→EN
-        text = re.sub(r'\bI request kindly\b', 'I kindly request', text)
-        text = re.sub(r'\bWe request kindly\b', 'We kindly request', text)
-        text = re.sub(r'\bPlease to confirm\b', 'Please confirm', text)
-        text = re.sub(r'\bPlease to provide\b', 'Please provide', text)
-        text = re.sub(r'\bPlease to send\b', 'Please send', text)
-        
-        # Fix common awkward phrases
-        text = re.sub(r'\bI am asking\b', 'I would like to ask', text)
-        text = re.sub(r'\bWe are asking\b', 'We would like to ask', text)
-        text = re.sub(r'\bI am requesting\b', 'I would like to request', text)
-        text = re.sub(r'\bWe are requesting\b', 'We would like to request', text)
-        
-        # Fix "thank you in advance" variations
-        text = re.sub(r'\bThank you in forward\b', 'Thank you in advance', text)
-        text = re.sub(r'\bThanks in forward\b', 'Thanks in advance', text)
-        text = re.sub(r'\bThank you earlier\b', 'Thank you in advance', text)
-        
-        # Fix "looking forward" variations
-        text = re.sub(r'\bI am waiting for\b', 'I look forward to', text)
-        text = re.sub(r'\bWe are waiting for\b', 'We look forward to', text)
-        
-        return text
-    
-    def _post_process_en_to_pl(self, text):
-        """
-        Post-process English→Polish translations to fix common issues.
-        Makes translations sound more natural to Polish speakers.
-        """
-        import re
-        
-        # Fix CRITICAL business terms that often get mistranslated
-        text = re.sub(r'\bREQUEST FOR QUOTATION\b', 'PROŚBA O WYCENĘ', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bQUOTATION REQUEST\b', 'PROŚBA O WYCENĘ', text, flags=re.IGNORECASE)  
-        text = re.sub(r'\bRFQ\b', 'PROŚBA O WYCENĘ', text)
-        text = re.sub(r'\bINDUSTRIAL COMPONENTS\b', 'KOMPONENTY PRZEMYSŁOWE', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bINDUSTRIAL PARTS\b', 'CZĘŚCI PRZEMYSŁOWE', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bSUPPLY CHAIN\b', 'ŁAŃCUCH DOSTAW', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bPROCUREMENT\b', 'ZAMÓWIENIA', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bVENDOR\b', 'DOSTAWCA', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bCOMPLIANCE\b', 'ZGODNOŚĆ', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bSPECIFICATIONS?\b', 'SPECYFIKACJA', text, flags=re.IGNORECASE)
-        
-        # Fix closing formulas - replace awkward translations with proper Polish business closings
-        text = re.sub(r'\bUprzejmie pozdrowione\b', 'Łączymy pozdrowienia', text)
-        text = re.sub(r'\bUprzejme pozdrowienia\b', 'Łączymy pozdrowienia', text)
-        text = re.sub(r'\bMiłe pozdrowienia\b', 'Łączymy pozdrowienia', text)
-        text = re.sub(r'\bSerdeczne pozdrowienia\b', 'Łączymy pozdrowienia', text)
-        
-        # Fix overly formal salutations that sound unnatural in Polish business context
-        text = re.sub(r'\bSzanowny Panie i Pani\b', 'Szanowni Państwo', text)
-        text = re.sub(r'\bDrogi Panie lub Pani\b', 'Szanowni Państwo', text)
-        
-        # Fix awkward "please" translations
-        text = re.sub(r'\bproszę potwierdzić\b', 'prosimy o potwierdzenie', text)
-        text = re.sub(r'\bproszę wysłać\b', 'prosimy o przesłanie', text)
-        text = re.sub(r'\bproszę dostarczyć\b', 'prosimy o dostarczenie', text)
-        
-        # Fix "thank you in advance" - common awkward translation
-        text = re.sub(r'\bdziękuję z góry\b', 'z góry dziękuję', text)
-        text = re.sub(r'\bdzięki z góry\b', 'z góry dziękuję', text)
-        
-        # Fix "I would like to" constructions that sound too formal/awkward
-        text = re.sub(r'\bchciałbym prosić o\b', 'proszę o', text)
-        text = re.sub(r'\bchciałabym prosić o\b', 'proszę o', text)
-        text = re.sub(r'\bchcielibyśmy prosić o\b', 'prosimy o', text)
-        
-        # Fix "looking forward" awkward translations
-        text = re.sub(r'\bczekam na\b', 'oczekuję', text)
-        text = re.sub(r'\bczekamy na\b', 'oczekujemy', text)
-        
-        return text
+            translated = self.model.generate(**inputs, max_length=512, num_beams=4)
+        return self.tokenizer.decode(translated[0], skip_special_tokens=True)
 
 
 # ============================================================================
-# DOCUMENT PARSER CLASS
+# POST-PROCESSING
 # ============================================================================
 
-class DocumentParser:
-    """Parse and reconstruct Word documents with formatting preservation."""
-    
-    def __init__(self, input_path):
-        self.input_path = input_path
-        self.doc = Document(input_path)
-    
-    def parse(self):
-        """Parse document into structured format."""
-        parsed_content = []
-        
-        # Track table elements
-        table_elements = set()
-        for table in self.doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for para in cell.paragraphs:
-                        table_elements.add(para._element)
-        
-        # Parse document body
-        for element in self.doc.element.body:
-            # Check if paragraph
-            if element.tag.endswith('p'):
-                # Find corresponding paragraph object
-                for para in self.doc.paragraphs:
-                    if para._element == element and element not in table_elements:
-                        para_data = self._parse_paragraph(para)
-                        parsed_content.append(para_data)
-                        break
-            
-            # Check if table
-            elif element.tag.endswith('tbl'):
-                # Find corresponding table object
-                for table in self.doc.tables:
-                    if table._element == element:
-                        table_data = self._parse_table(table)
-                        parsed_content.append(table_data)
-                        break
-        
-        return parsed_content
-    
-    def _parse_paragraph(self, para):
-        """Parse a paragraph with all formatting."""
-        runs_data = []
-        
-        for run in para.runs:
-            run_data = {
-                'text': run.text,
-                'bold': run.bold,
-                'italic': run.italic,
-                'underline': run.underline,
-                'font_size': run.font.size.pt if run.font.size else None,
-                'font_name': run.font.name
-            }
-            runs_data.append(run_data)
-        
-        return {
-            'type': 'paragraph',
-            'runs': runs_data,
-            'alignment': para.alignment,
-            'style': para.style.name if para.style else None
-        }
-    
-    def _parse_table(self, table):
-        """Parse a table with all formatting."""
-        rows_data = []
-        
-        for row in table.rows:
-            cells_data = []
-            for cell in row.cells:
-                paragraphs_data = []
-                for para in cell.paragraphs:
-                    para_data = self._parse_paragraph(para)
-                    paragraphs_data.append(para_data)
-                cells_data.append({'paragraphs': paragraphs_data})
-            rows_data.append(cells_data)
-        
-        return {
-            'type': 'table',
-            'rows': rows_data
-        }
-    
-    def reconstruct(self, parsed_content, output_path):
-        """Reconstruct document from parsed content."""
-        new_doc = Document()
-        
-        for block in parsed_content:
-            if block['type'] == 'paragraph':
-                para = new_doc.add_paragraph()
-                
-                # Set style and alignment
-                if block.get('style'):
-                    try:
-                        para.style = block['style']
-                    except:
-                        pass
-                
-                if block.get('alignment'):
-                    para.alignment = block['alignment']
-                
-                # Add runs
-                for run_data in block['runs']:
-                    run = para.add_run(run_data['text'])
-                    run.bold = run_data.get('bold', False)
-                    run.italic = run_data.get('italic', False)
-                    run.underline = run_data.get('underline', False)
-                    
-                    if run_data.get('font_size'):
-                        run.font.size = Pt(run_data['font_size'])
-                    if run_data.get('font_name'):
-                        run.font.name = run_data['font_name']
-            
-            elif block['type'] == 'table':
-                # Create table
-                num_rows = len(block['rows'])
-                num_cols = len(block['rows'][0]) if num_rows > 0 else 0
-                
-                table = new_doc.add_table(rows=num_rows, cols=num_cols)
-                
-                # Fill table
-                for i, row_data in enumerate(block['rows']):
-                    for j, cell_data in enumerate(row_data):
-                        cell = table.rows[i].cells[j]
-                        
-                        # Clear default paragraph
-                        cell.text = ''
-                        
-                        # Add paragraphs
-                        for k, para_data in enumerate(cell_data['paragraphs']):
-                            if k == 0:
-                                para = cell.paragraphs[0]
-                            else:
-                                para = cell.add_paragraph()
-                            
-                            # Set alignment
-                            if para_data.get('alignment'):
-                                para.alignment = para_data['alignment']
-                            
-                            # Add runs
-                            for run_data in para_data['runs']:
-                                run = para.add_run(run_data['text'])
-                                run.bold = run_data.get('bold', False)
-                                run.italic = run_data.get('italic', False)
-                                
-                                if run_data.get('font_size'):
-                                    run.font.size = Pt(run_data['font_size'])
-        
-        new_doc.save(output_path)
+# Each entry: (compiled regex, replacement string)
+# Applied in order after EN→FR translation.
+_EN_TO_FR_FIXES = [
+    # Salutations — model often produces unnatural word order or phrasing
+    (re.compile(r"Cher(?:e)? Monsieur ou Madame[,.]?", re.IGNORECASE), "Madame, Monsieur,"),
+    (re.compile(r"Cher(?:e)? Madame ou Monsieur[,.]?", re.IGNORECASE), "Madame, Monsieur,"),
+    (re.compile(r"Cher Monsieur[,.]?", re.IGNORECASE), "Monsieur,"),
+    (re.compile(r"Chère Madame[,.]?", re.IGNORECASE), "Madame,"),
+    (re.compile(r"Cher Monsieur/Madame[,.]?", re.IGNORECASE), "Madame, Monsieur,"),
+    # Closings — literal translations that sound odd in French
+    (re.compile(r"Cordialement vôtre[,.]?", re.IGNORECASE), "Cordialement,"),
+    (re.compile(r"Sincèrement vôtre[,.]?", re.IGNORECASE), "Veuillez agréer l'expression de mes salutations distinguées,"),
+    (re.compile(r"Sincèrement[,.]?", re.IGNORECASE), "Cordialement,"),
+    (re.compile(r"Avec respect[,.]?", re.IGNORECASE), "Veuillez agréer mes salutations distinguées,"),
+    (re.compile(r"Meilleures salutations[,.]?", re.IGNORECASE), "Bien cordialement,"),
+]
+
+_FR_TO_EN_FIXES = [
+    # French formal closings that model over-translates
+    (re.compile(r"Please accept the expression of my distinguished regards[,.]?", re.IGNORECASE),
+     "Yours sincerely,"),
+    (re.compile(r"Please accept the expression of my sincere greetings[,.]?", re.IGNORECASE),
+     "Yours faithfully,"),
+    (re.compile(r"Please accept my distinguished greetings[,.]?", re.IGNORECASE),
+     "Yours sincerely,"),
+]
+
+
+def _post_process(text: str, src_lang: str) -> str:
+    fixes = _EN_TO_FR_FIXES if src_lang == "en" else _FR_TO_EN_FIXES
+    for pattern, replacement in fixes:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 # ============================================================================
-# GRADIO APPLICATION
+# IN-PLACE PARAGRAPH TRANSLATION
 # ============================================================================
 
-# Global translator cache
-translator_cache = {}
+from docx.oxml.ns import qn as _qn
 
-def get_translator(source_lang, target_lang):
-    """Get or create translator with caching."""
-    cache_key = f"{source_lang}_{target_lang}"
-    
-    if cache_key not in translator_cache:
-        translator_cache[cache_key] = NLLBTranslator(source_lang, target_lang)
-    
-    return translator_cache[cache_key]
+_W_R  = _qn("w:r")
+_W_T  = _qn("w:t")
+_W_BR = _qn("w:br")
 
 
-def translate_document(input_file, language_direction, progress=gr.Progress()):
-    """Main translation function."""
-    
+def _translate_para_inplace(para, translator: "MarianTranslator",
+                            glossary: "GlossaryProcessor") -> int:
+    """
+    Translate a paragraph in-place.
+
+    - If the paragraph contains soft line breaks (<w:br/>), each line segment
+      is translated independently so the break positions are preserved exactly.
+    - Otherwise the whole paragraph text is translated as one unit and the
+      result is placed in run[0] (which keeps all its formatting attributes).
+
+    Returns number of glossary hits.
+    """
+    p_elem = para._p
+
+    # Collect text elements (<w:t>) and break elements (<w:br/>) in document
+    # order by walking every <w:r> that is a descendant of this paragraph.
+    # We build a list of "segments": each segment is a list of <w:t> nodes
+    # whose text should be translated together (i.e. between two <w:br/>s).
+    segments: list[list] = [[]]   # list of lists of lxml elements
+
+    for r_elem in p_elem.iter(_W_R):
+        for child in r_elem:
+            if child.tag == _W_T:
+                segments[-1].append(child)
+            elif child.tag == _W_BR:
+                segments.append([])   # start a new segment after the break
+
+    total_hits = 0
+
+    if len(segments) <= 1:
+        # No soft line breaks — original fast path
+        full_text = "".join((e.text or "") for e in segments[0]) if segments else ""
+        if not full_text.strip():
+            return 0
+        translated, hits = _translate_block_text(full_text, translator, glossary)
+        total_hits += hits
+        if segments and segments[0]:
+            segments[0][0].text = translated
+            for t_elem in segments[0][1:]:
+                t_elem.text = ""
+    else:
+        # Has soft line breaks — translate each segment independently
+        for seg in segments:
+            seg_text = "".join((e.text or "") for e in seg)
+            if not seg_text.strip() or not seg:
+                continue
+            translated, hits = _translate_block_text(seg_text, translator, glossary)
+            total_hits += hits
+            seg[0].text = translated
+            for t_elem in seg[1:]:
+                t_elem.text = ""
+
+    return total_hits
+
+
+# ============================================================================
+# TRANSLATION PIPELINE
+# ============================================================================
+
+# Global model cache to avoid reloading on every call
+_translator_cache: dict[str, MarianTranslator] = {}
+
+
+def _get_translator(src: str, tgt: str) -> MarianTranslator:
+    key = f"{src}_{tgt}"
+    if key not in _translator_cache:
+        _translator_cache[key] = MarianTranslator(src, tgt)
+    return _translator_cache[key]
+
+
+def _translate_block_text(text: str, translator: MarianTranslator,
+                          glossary: GlossaryProcessor) -> tuple[str, int]:
+    """Translate a single text string with glossary enforcement and post-processing."""
+    encoded, placeholder_map = glossary.encode(text)
+    translated = translator.translate(encoded)
+    translated, count = glossary.decode(translated, placeholder_map)
+    translated = _post_process(translated, translator.source_lang)
+    return translated, count
+
+
+def translate_document(
+    input_file,
+    language_direction: str,
+    glossary_text: str,
+    progress=gr.Progress(),
+) -> tuple:
+
     if input_file is None:
-        return None, "❌ Please upload a document first!", ""
-    
-    # Parse language direction
+        return None, "❌ Please upload a .docx document first.", ""
+
     lang_map = {
-        "English → Polish": ("en", "pl"),
-        "Polish → English": ("pl", "en")
+        "English → French": ("en", "fr"),
+        "French → English": ("fr", "en"),
     }
-    source_lang, target_lang = lang_map[language_direction]
-    
+    src, tgt = lang_map[language_direction]
+    glossary = GlossaryProcessor(glossary_text or "")
+
     try:
-        # Check file size
-        file_size = os.path.getsize(input_file.name)
+        file_path = input_file if isinstance(input_file, str) else input_file.name
+        file_size = os.path.getsize(file_path)
         if file_size > 10 * 1024 * 1024:
-            return None, f"❌ File too large! Max: 10MB. Your file: {file_size/1024/1024:.1f}MB", ""
-        
-        progress(0.1, desc="🔄 Loading translator...")
-        translator = get_translator(source_lang, target_lang)
-        
-        progress(0.2, desc="📄 Parsing document...")
-        parser = DocumentParser(input_file.name)
-        parsed_content = parser.parse()
-        
-        para_count = sum(1 for block in parsed_content if block['type'] == 'paragraph')
-        table_count = sum(1 for block in parsed_content if block['type'] == 'table')
-        
-        progress(0.3, desc=f"✓ Parsed {para_count} paragraphs, {table_count} tables")
-        
-        # Translate
-        translated_content = []
-        total_blocks = len(parsed_content)
-        
-        for i, block in enumerate(parsed_content):
-            progress_val = 0.3 + (i / total_blocks) * 0.5
-            progress(progress_val, desc=f"🌐 Translating block {i+1}/{total_blocks}...")
-            
-            if block['type'] == 'paragraph':
-                translated_block = copy.deepcopy(block)
-                
-                # Combine all run texts into one string for translation
-                full_text = ''.join(run['text'] for run in translated_block['runs'])
-                
-                if full_text.strip():
-                    # Translate the entire paragraph at once
-                    translated_text = translator.translate_text(full_text)
-                    
-                    # IMPROVED: Simpler, more robust formatting preservation
-                    if len(translated_block['runs']) == 1:
-                        # Simple case: one run
-                        translated_block['runs'][0]['text'] = translated_text
-                    else:
-                        # Multiple runs: Use improved distribution strategy
-                        original_runs = [run['text'] for run in block['runs']]
-                        
-                        # Try to preserve formatting by mapping words intelligently
-                        original_words = full_text.split()
-                        translated_words = translated_text.split()
-                        
-                        if len(original_words) > 0 and len(translated_words) > 0:
-                            # Calculate word distribution ratios
-                            word_ratios = []
-                            total_orig_chars = sum(len(run['text']) for run in block['runs'])
-                            
-                            for run in block['runs']:
-                                if total_orig_chars > 0:
-                                    ratio = len(run['text']) / total_orig_chars
-                                    word_ratios.append(ratio)
-                                else:
-                                    word_ratios.append(0)
-                            
-                            # Distribute words across runs
-                            current_word = 0
-                            for i, ratio in enumerate(word_ratios):
-                                words_for_run = max(1, int(len(translated_words) * ratio))
-                                
-                                if i == len(word_ratios) - 1:  # Last run gets remainder
-                                    run_words = translated_words[current_word:]
-                                else:
-                                    run_words = translated_words[current_word:current_word + words_for_run]
-                                
-                                translated_block['runs'][i]['text'] = ' '.join(run_words)
-                                current_word += len(run_words)
-                        else:
-                            # Fallback: put everything in first run
-                            translated_block['runs'][0]['text'] = translated_text
-                            for j in range(1, len(translated_block['runs'])):
-                                translated_block['runs'][j]['text'] = ''
-                
-                translated_content.append(translated_block)
-            
-            elif block['type'] == 'table':
-                translated_block = copy.deepcopy(block)
-                for row in translated_block['rows']:
-                    for cell in row:
-                        for para in cell['paragraphs']:
-                            # Same logic for table paragraphs
-                            full_text = ''.join(run['text'] for run in para['runs'])
-                            
-                            if full_text.strip():
-                                translated_text = translator.translate_text(full_text)
-                                
-                                # IMPROVED: Same robust formatting for table cells
-                                if len(para['runs']) == 1:
-                                    para['runs'][0]['text'] = translated_text
-                                else:
-                                    # Multiple runs in table cell
-                                    original_words = full_text.split()
-                                    translated_words = translated_text.split()
-                                    
-                                    if len(original_words) > 0 and len(translated_words) > 0:
-                                        # Simple word-based distribution for table cells
-                                        words_per_run = max(1, len(translated_words) // len(para['runs']))
-                                        current_word = 0
-                                        
-                                        for j in range(len(para['runs'])):
-                                            if j == len(para['runs']) - 1:  # Last run gets remainder
-                                                run_words = translated_words[current_word:]
-                                            else:
-                                                run_words = translated_words[current_word:current_word + words_per_run]
-                                            
-                                            para['runs'][j]['text'] = ' '.join(run_words)
-                                            current_word += len(run_words)
-                                    else:
-                                        # Fallback for table cells
-                                        para['runs'][0]['text'] = translated_text
-                                        for j in range(1, len(para['runs'])):
-                                            para['runs'][j]['text'] = ''
-                
-                translated_content.append(translated_block)
-        
-        progress(0.8, desc="📝 Reconstructing document...")
-        
-        # Create output
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_file:
-            output_path = tmp_file.name
-        
-        parser.reconstruct(translated_content, output_path)
-        
-        progress(1.0, desc="✅ Complete!")
-        
-        # Preview
-        preview_lines = [
-            f"📊 **Translation Summary**",
-            f"- Paragraphs: {para_count}",
-            f"- Tables: {table_count}",
-            f"- Direction: {source_lang.upper()} → {target_lang.upper()}",
-            f"- Model: {translator.model_name}",
-            f"- Device: {translator.device}",
-            "",
-            "✅ **Translation complete!** Download your document below."
+            return None, f"❌ File too large ({file_size/1024/1024:.1f} MB). Limit: 10 MB.", ""
+
+        progress(0.05, desc="Loading translation model…")
+        translator = _get_translator(src, tgt)
+
+        # Copy original: all page layout, styles, table borders, headers/footers
+        # are preserved because we only touch run.text — never recreate structure.
+        progress(0.12, desc="Preparing document copy…")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+            output_path = tmp.name
+        shutil.copy2(file_path, output_path)
+
+        doc = Document(output_path)
+        body_paras = list(doc.paragraphs)
+        tables = list(doc.tables)
+
+        # Collect all paragraphs to translate (body + table cells + headers/footers)
+        table_paras = [
+            para
+            for table in tables
+            for row in table.rows
+            for cell in row.cells
+            for para in cell.paragraphs
         ]
-        
-        status_msg = "✅ **Success!** Download your translated document below.\n\n💡 *Always review translations before external use.*"
-        
-        return output_path, status_msg, "\n".join(preview_lines)
-        
-    except Exception as e:
+        section_paras = [
+            para
+            for section in doc.sections
+            for hf in (section.header, section.footer,
+                       section.even_page_header, section.even_page_footer,
+                       section.first_page_header, section.first_page_footer)
+            if hf is not None
+            for para in hf.paragraphs
+        ]
+
+        para_count = sum(1 for p in body_paras if p.text.strip())
+        table_count = len(tables)
+        total_glossary_hits = 0
+
+        all_paras = body_paras + table_paras + section_paras
+        total = len(all_paras)
+
+        for i, para in enumerate(all_paras):
+            progress(0.15 + (i / total) * 0.73,
+                     desc=f"Translating paragraph {i + 1}/{total}…")
+            total_glossary_hits += _translate_para_inplace(para, translator, glossary)
+
+        progress(0.90, desc="Saving document…")
+        doc.save(output_path)
+
+        progress(1.0, desc="Done!")
+
+        glossary_line = (
+            f"- Glossary terms enforced: **{total_glossary_hits}** replacements"
+            if glossary.terms
+            else "- Glossary: none provided"
+        )
+
+        summary = "\n".join([
+            "### 📊 Translation Report",
+            f"- Direction: **{src.upper()} → {tgt.upper()}**",
+            f"- Paragraphs preserved: **{para_count}**",
+            f"- Tables preserved: **{table_count}**",
+            glossary_line,
+            f"- Model: `{translator.model_name}`",
+            "",
+            "✅ Download your translated document below.",
+            "",
+            "> 💡 Always review MT output before external use.",
+        ])
+
+        return output_path, "✅ Translation complete!", summary
+
+    except Exception as exc:
         import traceback
-        error_details = traceback.format_exc()
-        print(f"❌ Translation error: {str(e)}")
-        print(f"   Error details: {error_details}")
-        
-        # Try to provide more specific error information
-        if "CUDA" in str(e) or "device" in str(e).lower():
-            error_msg = f"❌ **Device Error:** {str(e)}\n\n💡 *The app may be trying to use GPU but falling back to CPU. This can affect performance but shouldn't break functionality.*"
-        elif "model" in str(e).lower() or "tokenizer" in str(e).lower():
-            error_msg = f"❌ **Model Loading Error:** {str(e)}\n\n💡 *The fine-tuned model may be temporarily unavailable. Try again in a few minutes.*"
-        elif "memory" in str(e).lower() or "out of memory" in str(e).lower():
-            error_msg = f"❌ **Memory Error:** Document too large or complex.\n\n💡 *Try with a smaller document or simpler formatting.*"
-        elif "docx" in str(e).lower() or "document" in str(e).lower():
-            error_msg = f"❌ **Document Format Error:** {str(e)}\n\n💡 *Ensure your document is a valid .docx file with standard formatting.*"
-        else:
-            error_msg = f"❌ **Error:** {str(e)}\n\n```\n{error_details}\n```"
-        
-        return None, error_msg, ""
+        tb = traceback.format_exc()
+        print(tb)
+        return None, f"❌ Error: {exc}", ""
 
 
 # ============================================================================
 # GRADIO INTERFACE
 # ============================================================================
 
-with gr.Blocks(title="IntraLingo") as demo:
-    
+with gr.Blocks(title="IntraLingo", theme=gr.themes.Soft()) as demo:
+
     gr.Markdown("""
     # 🌐 IntraLingo
-    ## Professional Document Translation (EN ↔ PL)
-    
-    Translate business documents with complete formatting preservation.
+    ## Professional Document Translation · EN ↔ FR
+
+    Upload a `.docx` file → get back a fully translated document with **all formatting intact**:
+    headings, bold/italic, tables, paragraph styles. Add optional custom terminology to
+    enforce consistent business vocabulary.
     """)
-    
-    gr.Markdown("""
-    > ⚠️ **Demo Version** - Fine-tuned on business correspondence. Always review translations before external use.
-    """)
-    
+
     with gr.Row():
-        with gr.Column():
-            gr.Markdown("### 📁 Upload & Translate")
-            
+        with gr.Column(scale=1):
+            gr.Markdown("### 📁 Document")
             input_file = gr.File(
-                label="Upload Document (.docx)",
-                file_types=['.docx'],
-                type="filepath"
+                label="Upload .docx",
+                file_types=[".docx"],
+                type="filepath",
             )
-            
             language_direction = gr.Dropdown(
-                choices=["English → Polish", "Polish → English"],
-                value="English → Polish",
-                label="Translation Direction"
+                choices=["English → French", "French → English"],
+                value="English → French",
+                label="Translation direction",
             )
-            
-            translate_btn = gr.Button("🔄 Translate Document", variant="primary", size="lg")
-        
-        with gr.Column():
-            gr.Markdown("### 📥 Download")
-            
-            output_file = gr.File(label="Translated Document", interactive=False)
-            status_msg = gr.Markdown("")
-    
+
+        with gr.Column(scale=1):
+            gr.Markdown("### 📖 Custom Glossary *(optional)*")
+            glossary_input = gr.Textbox(
+                label="Term pairs (one per line)",
+                placeholder=(
+                    "# One pair per line, any separator\n"
+                    "invoice → facture\n"
+                    "compliance → conformité\n"
+                    "CEO → PDG\n"
+                    "Acme Corp → Acme Corp"
+                ),
+                lines=8,
+                max_lines=20,
+            )
+
+    translate_btn = gr.Button("🔄 Translate Document", variant="primary", size="lg")
+
     with gr.Row():
-        preview_box = gr.Markdown("")
-    
+        with gr.Column(scale=1):
+            output_file = gr.File(label="📥 Translated Document", interactive=False)
+            status_msg = gr.Markdown("")
+        with gr.Column(scale=1):
+            report_box = gr.Markdown("")
+
     translate_btn.click(
         fn=translate_document,
-        inputs=[input_file, language_direction],
-        outputs=[output_file, status_msg, preview_box]
+        inputs=[input_file, language_direction, glossary_input],
+        outputs=[output_file, status_msg, report_box],
     )
-    
+
     gr.Markdown("""
     ---
-    **Model:** NLLB-200 base model (hotfix for quality issues)  
-    **Privacy:** Documents processed in memory only, not stored  
-    **Quality:** Enhanced with business terminology corrections  
-    **Version:** 2.2 (April 2026) - Base model + improved formatting + business terms fix
+    **Model:** [Helsinki-NLP/opus-mt-tc-big-en-fr](https://huggingface.co/Helsinki-NLP/opus-mt-tc-big-en-fr)
+    · MarianMT, state-of-the-art open-source NMT
+    &nbsp;·&nbsp; **Format preservation:** headers, bold/italic, tables, paragraph styles
+    &nbsp;·&nbsp; **Glossary enforcement:** placeholder-based terminology injection
+    &nbsp;·&nbsp; **Privacy:** documents processed in memory only, never stored
+    &nbsp;·&nbsp; *Developed by Agnès Heijligers — ML Engineer & Professional Translator*
     """)
 
-def get_system_info():
-    """Get system information for debugging."""
-    import torch
-    import transformers
-    import gradio as gr
-    from docx import __version__ as docx_version
-    
-    return f"""
-    **Debug Info:**
-    - Transformers: {transformers.__version__}
-    - PyTorch: {torch.__version__}
-    - Gradio: {gr.__version__}
-    - Python-docx: {docx_version}
-    - CUDA Available: {torch.cuda.is_available()}
-    """
-
 if __name__ == "__main__":
-    print("🚀 Starting IntraLingo...")
-    print(get_system_info())
     demo.queue()
-    demo.launch(theme=gr.themes.Soft())
+    demo.launch()
